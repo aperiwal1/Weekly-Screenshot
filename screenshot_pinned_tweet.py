@@ -1,15 +1,16 @@
 import asyncio
 import os
+from pathlib import Path
 from playwright.async_api import async_playwright
 
-OUTPUT_DIR = "site"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+OUTPUT_DIR = Path("site")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-PINNED_TWEET_PNG = os.path.join(OUTPUT_DIR, "pinned_tweet.png")
-TE_US_PNG        = os.path.join(OUTPUT_DIR, "te_us_high.png")
-TE_CA_PNG        = os.path.join(OUTPUT_DIR, "te_ca_high.png")
+PINNED_TWEET_PNG = OUTPUT_DIR / "pinned_tweet.png"
+WIDGET_HTML      = OUTPUT_DIR / "fxs_widget.html"
+ECON_PNG         = OUTPUT_DIR / "econ_us_ca_high.png"
 
-# ---------- helpers ----------
+# ----------------- helpers -----------------
 
 async def safe_click(page, selectors, timeout=3000):
     """Try a list of selectors until one clicks; supports ('role','button','Name') tuples."""
@@ -26,7 +27,7 @@ async def safe_click(page, selectors, timeout=3000):
     return False
 
 async def safe_check(page, selectors, timeout=3000):
-    """Try to .check() a checkbox-like control; if that fails, click it."""
+    """Try to check a checkbox-like thing; if not checkable, click it."""
     for sel in selectors:
         try:
             if isinstance(sel, tuple) and len(sel) == 3 and sel[0] == "role":
@@ -46,10 +47,9 @@ async def safe_check(page, selectors, timeout=3000):
     return False
 
 async def scroll_load_full_week(page, late_day_markers=("Thu","Fri","Sat","Sun"), max_steps=16):
-    """Scroll container/page to trigger lazy-load until late-week markers appear, then back to top."""
+    """Scroll to trigger lazy-load until late-week markers appear, then back to top."""
     await page.evaluate("""
-      (function() {
-        // grab a sensible scrollable container if present
+      (function(){
         const candidates = [
           'section:has(table)',
           'div:has(table)',
@@ -69,7 +69,7 @@ async def scroll_load_full_week(page, late_day_markers=("Thu","Fri","Sat","Sun")
     for _ in range(max_steps):
         try:
             await page.evaluate("""
-              (function() {
+              (function(){
                 const el = window.__calEl || document.scrollingElement;
                 el.scrollBy({ top: window.innerHeight, left: 0, behavior: 'instant' });
               })();
@@ -77,14 +77,14 @@ async def scroll_load_full_week(page, late_day_markers=("Thu","Fri","Sat","Sun")
         except:
             pass
         await asyncio.sleep(0.7)
-        html = (await page.content())[:220000].lower()
+        html = (await page.content())[:240000].lower()
         if any(d.lower() in html for d in late_day_markers):
             saw_late = True
             break
     # back to top
     try:
         await page.evaluate("""
-          (function() {
+          (function(){
             const el = window.__calEl || document.scrollingElement;
             el.scrollTo({ top: 0, left: 0, behavior: 'instant' });
           })();
@@ -92,10 +92,10 @@ async def scroll_load_full_week(page, late_day_markers=("Thu","Fri","Sat","Sun")
     except:
         pass
     await asyncio.sleep(0.6)
-    print(f"[TE] Late-week detected: {saw_late}")
+    print(f"[Widget] Late-week detected: {saw_late}")
 
 async def crop_container_or_top(page, out_path, crop_height=1200):
-    """Crop the main calendar/container or, if not found, top of viewport."""
+    """Crop the main calendar/container or top of viewport."""
     container = None
     for sel in [
         'section:has(table)',
@@ -114,14 +114,14 @@ async def crop_container_or_top(page, out_path, crop_height=1200):
 
     if not container:
         clip = {"x": 0, "y": 0, "width": 1600, "height": crop_height}
-        await page.screenshot(path=out_path, clip=clip)
-        print(f"[TE][OK] Saved (fallback top-crop): {out_path}")
+        await page.screenshot(path=str(out_path), clip=clip)
+        print(f"[Widget][OK] Saved (fallback top-crop): {out_path}")
         return
 
     box = await container.bounding_box()
     if not box:
-        await page.screenshot(path=out_path, full_page=True)
-        print(f"[TE][OK] Saved (bbox fallback): {out_path}")
+        await page.screenshot(path=str(out_path), full_page=True)
+        print(f"[Widget][OK] Saved (bbox fallback): {out_path}")
         return
 
     top_height = int(min(box["height"], crop_height))
@@ -131,10 +131,10 @@ async def crop_container_or_top(page, out_path, crop_height=1200):
         "width": int(box["width"]),
         "height": top_height
     }
-    await page.screenshot(path=out_path, clip=clip)
-    print(f"[TE][OK] Saved (cropped): {out_path}")
+    await page.screenshot(path=str(out_path), clip=clip)
+    print(f"[Widget][OK] Saved (cropped): {out_path}")
 
-# ---------- captures ----------
+# ----------------- captures -----------------
 
 async def capture_pinned_tweet(context):
     page = await context.new_page()
@@ -149,65 +149,87 @@ async def capture_pinned_tweet(context):
         await page.close()
         return False
 
-    await tweet.screenshot(path=PINNED_TWEET_PNG)
+    await tweet.screenshot(path=str(PINNED_TWEET_PNG))
     print(f"[Pinned][OK] Saved: {PINNED_TWEET_PNG}")
     await page.close()
     return True
 
-async def capture_te_country_calendar(context, country_slug, out_path):
+def write_widget_html():
     """
-    TradingEconomics country calendar:
-      - Force 'This Week'
-      - Set importance=High (3-star)
-      - Scroll to load full week
-      - Crop top portion
+    Generates a minimal HTML that embeds the FXStreet Calendar widget.
+    We set:
+      - country-code="US,CA"
+      - timezone-offset="240"  (Toronto in August is UTC-4 → +240 minutes behind UTC)
+    Impact + Date (This Week) are selected via scripted clicks after load.
+    Docs: calendar widget parameters + utilities. 
     """
-    url = f"https://tradingeconomics.com/{country_slug}/calendar"
+    WIDGET_HTML.write_text(f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>FXStreet Calendar — US & CA</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- FXStreet widget loader -->
+  <script src="https://staticcontent.fxsstatic.com/widgets-v2/stable/fxs-widgets.js" defer></script>
+  <style>
+    body {{ margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }}
+    .wrap {{ max-width: 1600px; margin: 0 auto; padding: 12px; }}
+    h1 {{ font-size: 18px; margin: 8px 0 12px; }}
+    .calendar {{ border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>High-Impact US & Canada — This Week</h1>
+    <!-- FXStreet Economic Calendar widget -->
+    <div class="calendar">
+      <div
+        fxs-widget
+        name="calendar"
+        country-code="US,CA"
+        timezone-offset="240">
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+""", encoding="utf-8")
+    print(f"[Widget] Wrote {WIDGET_HTML}")
+
+async def capture_fxstreet_widget(context):
+    # 1) write local HTML with widget
+    write_widget_html()
+
+    # 2) open the local file
+    file_url = WIDGET_HTML.resolve().as_uri()  # file:///...
     page = await context.new_page()
-    print(f"[TE] Navigating… {url}")
-    await page.goto(url)
+    print(f"[Widget] Opening local widget page… {file_url}")
+    await page.goto(file_url)
+    # wait extra for widget JS to load and render
     await asyncio.sleep(6)
 
-    # Accept cookies if shown (best effort)
-    for sel in [
-        'button:has-text("Accept")',
-        'button:has-text("I Accept")',
-        'button:has-text("Agree")',
-        'button:has-text("Accept All")',
-        ('role', 'button', 'Accept'),
-        '[aria-label*="accept"]'
-    ]:
-        if await safe_click(page, [sel], timeout=1500):
-            await asyncio.sleep(1)
-            break
-
-    # 1) Date: This Week (header chip or menu option)
-    print("[TE] Selecting This Week…")
-    week_ok = await safe_click(page, [
+    # 3) Try to click "This Week" in the widget’s own UI
+    print("[Widget] Forcing 'This Week'…")
+    await safe_click(page, [
         'button:has-text("This Week")',
         ('role', 'button', 'This Week'),
         'a:has-text("This Week")',
-        'li:has-text("This Week")',
-        'div[role="option"]:has-text("This Week")',
-        'button:has-text("Week")'  # fallback
+        'button:has-text("Week")'
     ], timeout=4000)
-    if not week_ok:
-        print("[TE][WARN] Could not confirm 'This Week' selection.")
-    await asyncio.sleep(2)
+    await asyncio.sleep(1.5)
 
-    # 2) Importance: High / 3-star
-    print("[TE] Selecting High importance…")
-    # Try to open an importance filter if it exists
+    # 4) Impact: High only (unselect Low/Medium if toggled)
+    print("[Widget] Selecting High impact…")
+    # Open impact/importance control if needed
     await safe_click(page, [
+        'button:has-text("Impact")',
+        ('role', 'button', 'Impact'),
+        '[aria-label*="Impact"]',
+        '[data-testid*="impact"]',
         'button:has-text("Importance")',
         ('role', 'button', 'Importance'),
-        '[aria-label*="Importance"]',
-        '[data-testid*="importance"]',
-        'button:has-text("Priority")',
-        ('role', 'button', 'Priority')
-    ], timeout=1500)
-    await asyncio.sleep(0.2)
-
+    ], timeout=2000)
+    await asyncio.sleep(0.4)
     # Unselect lower levels
     for low in ["Low", "Medium"]:
         await safe_click(page, [
@@ -215,37 +237,32 @@ async def capture_te_country_calendar(context, country_slug, out_path):
             f'label:has-text("{low}")',
             f'button:has-text("{low}")',
             f'[aria-label*="{low}"]'
-        ], timeout=800)
-
+        ], timeout=900)
     # Ensure High is on
-    high_ok = await safe_check(page, [
+    await safe_check(page, [
         ('role', 'checkbox', 'High'),
         'label:has-text("High")',
         'button:has-text("High")',
         '[aria-label*="High"]',
-        'span:has-text("★★★")',   # star marker fallback
+        'span:has-text("★★★")'
     ], timeout=1500)
-    if not high_ok:
-        print("[TE][WARN] Could not confirm High selection.")
-
-    # Apply/close if there is an explicit button
+    # Apply/close if present
     await safe_click(page, [
         'button:has-text("Apply")',
         ('role', 'button', 'Apply'),
         'button:has-text("Done")',
         ('role', 'button', 'Done'),
-        'button:has-text("Close")'
+        'button:has-text("Close")',
+        'button:has-text("OK")'
     ], timeout=1500)
 
-    await asyncio.sleep(2)
-
-    # 3) Ensure full week is loaded
+    # 5) Scroll to load late week, then back to top; crop compact section
     await scroll_load_full_week(page)
-
-    # 4) Crop compact top section
-    await crop_container_or_top(page, out_path, crop_height=1200)
+    await crop_container_or_top(page, ECON_PNG, crop_height=1200)
     await page.close()
     return True
+
+# ----------------- main -----------------
 
 async def main():
     async with async_playwright() as p:
@@ -257,14 +274,11 @@ async def main():
                         "Chrome/120.0.0.0 Safari/537.36")
         )
 
-        # Earnings (pinned tweet) – title will be “Earnings Calendar” in Slack
+        # Earnings (pinned tweet) – in Slack we’ll title it “Earnings Calendar”
         await capture_pinned_tweet(context)
 
-        # US (High, This Week)
-        await capture_te_country_calendar(context, "united-states", TE_US_PNG)
-
-        # Canada (High, This Week)
-        await capture_te_country_calendar(context, "canada", TE_CA_PNG)
+        # FXStreet widget (US+CA), forced to This Week + High via clicks
+        await capture_fxstreet_widget(context)
 
         await browser.close()
 
