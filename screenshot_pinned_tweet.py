@@ -44,7 +44,7 @@ async def safe_check(page, selectors, timeout=3000):
                 continue
     return False
 
-async def crop_container_or_top(page, out_path, crop_height=1600):
+async def crop_container_or_top(page, out_path, crop_height=2000):
     """Crop the main calendar/container or, if not found, top of viewport."""
     container = None
     for sel in [
@@ -244,7 +244,7 @@ async def capture_forexfactory_calendar(context):
     await scroll_load_full_week(page)
 
     # Crop compact top section
-    await crop_container_or_top(page, FF_CAL_PNG, crop_height=1200)
+    await crop_container_or_top(page, FF_CAL_PNG, crop_height=2000)
     await page.close()
     return True
 
@@ -270,4 +270,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
