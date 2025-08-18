@@ -31,6 +31,11 @@ jobs:
       - name: Run screenshot script (outputs to site/)
         run: python screenshot_pinned_tweet.py
 
+      - name: Inspect site/ output
+        run: |
+          echo "Listing ./site"
+          ls -lah site || true
+          
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
