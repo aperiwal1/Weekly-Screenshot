@@ -1,51 +1,94 @@
-name: Weekly Screenshot
+name: Daily Screenshot (ForexFactory + Earnings)
 
 on:
+  # Trigger daily at 12:00 UTC (8:00 AM ET during DST / 7:00 AM during EST)
   schedule:
-    - cron: "0 12 * * 1"  # Runs every Monday at 8AM New York (12:00 UTC considering DST)
-  workflow_dispatch:       # Allow manual runs
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Timezone gate (only continue at 08:00 America/New_York)
+        uses: zcong1993/cron-timezone@v1
+        with:
+          cron: "0 8 * * *"            # 08:00 every day
+          timezone: "America/New_York" # DST-aware
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          echo "playwright" > requirements.txt
           pip install -r requirements.txt
-          playwright install --with-deps
+          playwright install --with-deps chromium
 
-      - name: Run script
+      - name: Run screenshot script (outputs to site/)
         run: python screenshot_forexfactory.py
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Inspect site/ output (debug)
+        run: |
+          echo "Listing ./site"
+          ls -lah site || true
+
+      # Upload the 'site' folder for GitHub Pages (correct action for Pages)
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: github-pages
-          path: site
+          path: ./site
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      pages: write      # to deploy to Pages
-      id-token: write   # to verify the deployment
-
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
       - name: Deploy to GitHub Pages
-        id: deployment
+        id: deploy
         uses: actions/deploy-pages@v4
+
+  notify-slack:
+    needs: deploy
+    runs-on: ubuntu-latest
+    env:
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+    steps:
+      - name: Build Slack payload and send
+        run: |
+          set -euo pipefail
+
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          REPO="${GITHUB_REPOSITORY##*/}"
+          BASE_URL="https://${OWNER}.github.io/${REPO}"
+
+          EARN_URL="${BASE_URL}/pinned_tweet.png"
+          FF_URL="${BASE_URL}/forexfactory_full.png"
+
+          cat > payload.json <<'JSON'
+          {
+            "text": "Earnings and Economic Calendar for the week - For internal use only",
+            "attachments": [
+              { "title": "Earnings Calendar", "image_url": "__EARN_URL__" },
+              { "title": "Economic Calendar (ForexFactory - This Week)", "image_url": "__FF_URL__" }
+            ]
+          }
+          JSON
+
+          sed -i "s|__EARN_URL__|${EARN_URL}|g" payload.json
+          sed -i "s|__FF_URL__|${FF_URL}|g" payload.json
+
+          curl -sS -X POST -H 'Content-type: application/json' \
+            --data @payload.json \
+            "${SLACK_WEBHOOK}"
