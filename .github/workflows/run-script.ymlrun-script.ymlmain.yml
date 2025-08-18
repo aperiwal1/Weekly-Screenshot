@@ -1,60 +1,51 @@
-name: Weekly Screenshot Bot
+name: Weekly Screenshot
 
 on:
   schedule:
-    - cron: "0 12 * * 1-5"   # 12:00 UTC = 8:00 AM New York (EST/EDT)
-  workflow_dispatch:
+    - cron: "0 12 * * 1"  # Runs every Monday at 8AM New York (12:00 UTC considering DST)
+  workflow_dispatch:       # Allow manual runs
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: '3.9'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright requests
-          playwright install chromium
+          pip install -r requirements.txt
+          playwright install --with-deps
 
-      - name: Run screenshot script
-        run: python screenshot_pinned_tweet.py
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: screenshots
-          path: site/*.png
-
-  notify-slack:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: screenshots
-          path: site
-
-      - name: Notify Slack
+      - name: Run script
+        run: python screenshot_forexfactory.py
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-        run: |
-          curl -F file=@site/earnings_calendar.png \
-               -F "initial_comment=📊 *Earnings Calendar* — For internal use only" \
-               -F channels=#general \
-               -H "Authorization: Bearer $SLACK_WEBHOOK" \
-               https://slack.com/api/files.upload
 
-          curl -F file=@site/forexfactory_high_impact.png \
-               -F "initial_comment=💹 *Economic Calendar* — For internal use only" \
-               -F channels=#general \
-               -H "Authorization: Bearer $SLACK_WEBHOOK" \
-               https://slack.com/api/files.upload
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: github-pages
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write      # to deploy to Pages
+      id-token: write   # to verify the deployment
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
