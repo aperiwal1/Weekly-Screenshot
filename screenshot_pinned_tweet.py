@@ -68,162 +68,238 @@ async def capture_tradingview_calendar(context):
       - Date range: This week
       - Importance: High
       - Currencies: USD + CAD
+    Only uses https://www.tradingview.com/economic-calendar/
     """
-    # Try two known calendar URLs; first one usually works.
-    urls = [
-        "https://www.tradingview.com/markets/economic-calendar/",
-        "https://www.tradingview.com/economic-calendar/"
-    ]
-
+    url = "https://www.tradingview.com/economic-calendar/"
     page = await context.new_page()
+    print(f"[TV] Navigating… {url}")
+    await page.goto(url)
+    await asyncio.sleep(6)
 
-    loaded = False
-    for url in urls:
-        print(f"[TV] Navigating… {url}")
-        await page.goto(url)
-        await asyncio.sleep(6)
+    # Verify we’re on the correct host/path (avoid “bad page” captures)
+    try:
+        loc = page.url
+        if not (loc.startswith("https://www.tradingview.com/economic-calendar/")):
+            print(f"[TV][WARN] Unexpected location: {loc}")
+            await page.close()
+            return False
+    except:
+        pass
 
-        # Accept cookies if shown (best-effort)
-        for sel in [
-            'button:has-text("Accept all")',
-            'button:has-text("Accept All")',
-            'button:has-text("I accept")',
-            'button:has-text("Agree")',
-            ('role', 'button', 'Accept'),
-        ]:
-            if await safe_click(page, [sel], timeout=2000):
-                await asyncio.sleep(1)
-                break
-
-        # Heuristic: look for the calendar container to confirm page shape
-        if await page.query_selector("section:has(table), div:has(table), main"):
-            loaded = True
+    # Accept cookies if shown (best-effort)
+    for sel in [
+        'button:has-text("Accept all")',
+        'button:has-text("Accept All")',
+        'button:has-text("I accept")',
+        'button:has-text("Agree")',
+        ('role', 'button', 'Accept'),
+    ]:
+        try:
+            if isinstance(sel, tuple):
+                _, role, name = sel
+                await page.get_by_role(role, name=name).click(timeout=1500)
+            else:
+                await page.locator(sel).first.click(timeout=1500)
+            await asyncio.sleep(1)
             break
+        except:
+            pass
 
-    if not loaded:
-        print("[TV][WARN] Calendar shell not detected; will still attempt filters.")
-
-    # Open filters / settings
+    # Open filters/settings if necessary
     print("[TV] Opening filters/settings…")
-    opened = await safe_click(page, [
+    for sel in [
         ('role', 'button', 'Filter'),
         'button:has-text("Filter")',
         'button:has-text("Filters")',
         'button[aria-label*="Filter"]',
-        'button[title*="Filter"]',
-        'button:has(svg)',
-    ], timeout=4000)
-    if not opened:
-        print("[TV][WARN] Could not find Filters button. Continuing anyway.")
+        'button[title*="Filter"]'
+    ]:
+        try:
+            if isinstance(sel, tuple):
+                _, role, name = sel
+                await page.get_by_role(role, name=name).click(timeout=2000)
+            else:
+                await page.locator(sel).first.click(timeout=2000)
+            await asyncio.sleep(0.5)
+            break
+        except:
+            continue
 
-    await asyncio.sleep(1)
-
-    # Date range: "This week"
+    # Date range: This week
     print("[TV] Setting date range: This week…")
-    date_set = False
-    # Open date menu if present
-    if await safe_click(page, [
-        ('role', 'button', 'Date'), 'button:has-text("Date")',
-        'button[aria-label*="Date"]', '[data-name*="date"]'
-    ], timeout=1500):
-        await asyncio.sleep(0.5)
-        date_set = await safe_click(page, [
+    try:
+        # Open date dropdown if present
+        for sel in [
+            ('role', 'button', 'Date'),
+            'button:has-text("Date")',
+            'button[aria-label*="Date"]',
+            '[data-name*="date"]'
+        ]:
+            try:
+                if isinstance(sel, tuple):
+                    _, role, name = sel
+                    await page.get_by_role(role, name=name).click(timeout=1500)
+                else:
+                    await page.locator(sel).first.click(timeout=1500)
+                await asyncio.sleep(0.3)
+                break
+            except:
+                pass
+
+        # Pick "This week"
+        for sel in [
             ('role', 'option', 'This week'),
             'div[role="option"]:has-text("This week")',
             'li:has-text("This week")',
             'button:has-text("This week")'
-        ], timeout=2000)
-    else:
-        # Some UIs expose quick chips directly
-        date_set = await safe_click(page, [
-            'button:has-text("This week")',
-            ('role', 'button', 'This week')
-        ], timeout=2000)
-
-    if not date_set:
-        print("[TV][WARN] Date range 'This week' not set.")
+        ]:
+            try:
+                if isinstance(sel, tuple):
+                    _, role, name = sel
+                    await page.get_by_role(role, name=name).click(timeout=1500)
+                else:
+                    await page.locator(sel).first.click(timeout=1500)
+                await asyncio.sleep(0.3)
+                break
+            except:
+                pass
+    except:
+        print("[TV][WARN] Could not set date range explicitly.")
 
     # Importance: High only
     print("[TV] Selecting Impact: High…")
-    imp_ok = (
-        await safe_click(page, [
+    try:
+        for opener in [
             ('role', 'button', 'Importance'),
             'button:has-text("Importance")',
-            '[data-name*="importance"]',
-        ], timeout=1500)
-        or True  # sometimes chips already visible
-    )
-    # Now choose High
-    high_ok = await safe_click(page, [
-        ('role', 'checkbox', 'High'),
-        'label:has-text("High")',
-        'button:has-text("High")',
-        '[aria-label*="High"]',
-    ], timeout=2000)
-    if not high_ok:
+            '[data-name*="importance"]'
+        ]:
+            try:
+                if isinstance(opener, tuple):
+                    _, role, name = opener
+                    await page.get_by_role(role, name=name).click(timeout=1500)
+                else:
+                    await page.locator(opener).first.click(timeout=1500)
+                await asyncio.sleep(0.2)
+                break
+            except:
+                pass
+
+        for high in [
+            ('role', 'checkbox', 'High'),
+            'label:has-text("High")',
+            'button:has-text("High")',
+            '[aria-label*="High"]'
+        ]:
+            try:
+                if isinstance(high, tuple):
+                    _, role, name = high
+                    await page.get_by_role(role, name=name).check(timeout=1500)
+                else:
+                    # If it's a button/label chip
+                    try:
+                        await page.locator(high).first.check(timeout=1200)
+                    except:
+                        await page.locator(high).first.click(timeout=1200)
+                await asyncio.sleep(0.2)
+                break
+            except:
+                pass
+    except:
         print("[TV][WARN] Could not confirm High selection.")
 
     # Currencies: USD + CAD
     print("[TV] Selecting currencies: USD + CAD…")
-    # Sometimes there's a "Currencies" filter, or a search box.
-    # Try opening currency filter panel:
-    await safe_click(page, [
-        ('role', 'button', 'Currency'),
-        'button:has-text("Currency")',
-        'button:has-text("Currencies")',
-        '[data-name*="currency"]',
-    ], timeout=1500)
-    await asyncio.sleep(0.3)
+    try:
+        for opener in [
+            ('role', 'button', 'Currency'),
+            'button:has-text("Currency")',
+            'button:has-text("Currencies")',
+            '[data-name*="currency"]'
+        ]:
+            try:
+                if isinstance(opener, tuple):
+                    _, role, name = opener
+                    await page.get_by_role(role, name=name).click(timeout=1500)
+                else:
+                    await page.locator(opener).first.click(timeout=1500)
+                await asyncio.sleep(0.2)
+                break
+            except:
+                pass
 
-    for curr in ["USD", "CAD"]:
-        ok = (
-            await safe_check(page, [
-                ('role', 'checkbox', curr),
-                f'label:has-text("{curr}")'
-            ], timeout=1500)
-            or await safe_click(page, [
-                f'button:has-text("{curr}")',
-                f'[aria-label*="{curr}"]',
-                f'div:has-text("{curr}")'
-            ], timeout=1500)
-        )
-        if not ok:
-            print(f"[TV][WARN] Could not select currency: {curr}")
+        for curr in ["USD", "CAD"]:
+            done = False
+            # Try checkbox first
+            try:
+                await page.get_by_role("checkbox", name=curr).check(timeout=1200)
+                done = True
+            except:
+                pass
+            if not done:
+                for sel in [
+                    f'label:has-text("{curr}")',
+                    f'button:has-text("{curr}")',
+                    f'[aria-label*="{curr}"]',
+                    f'div:has-text("{curr}")'
+                ]:
+                    try:
+                        await page.locator(sel).first.click(timeout=1200)
+                        done = True
+                        break
+                    except:
+                        continue
+            if not done:
+                print(f"[TV][WARN] Could not select currency: {curr}")
+    except:
+        print("[TV][WARN] Currency selection skipped.")
 
-    # Apply / close filters if there’s an explicit button
-    await safe_click(page, [
+    # Apply / close filters, if there’s an explicit button
+    for sel in [
         'button:has-text("Apply")',
         ('role', 'button', 'Apply'),
         'button:has-text("Done")',
         ('role', 'button', 'Done'),
         'button:has-text("Close")'
-    ], timeout=1500)
-    await asyncio.sleep(2)
+    ]:
+        try:
+            if isinstance(sel, tuple):
+                _, role, name = sel
+                await page.get_by_role(role, name=name).click(timeout=1200)
+            else:
+                await page.locator(sel).first.click(timeout=1200)
+            await asyncio.sleep(0.5)
+            break
+        except:
+            continue
 
-    # Try to target the calendar list/table container to screenshot
+    # Make sure the calendar content exists before saving
     print("[TV] Capturing screenshot…")
-    saved = False
+    container = None
     for sel in [
-        'section:has(table)',        # generic section wrapping a table
+        'section:has(table)',
         'div:has(table)',
         'main',
-        '#root',
+        '#root'
     ]:
         try:
             el = await page.query_selector(sel)
             if el:
-                await el.screenshot(path=TV_CAL_PNG)
-                saved = True
+                container = el
                 break
         except:
             pass
 
-    if not saved:
-        await page.screenshot(path=TV_CAL_PNG, full_page=True)
+    if not container:
+        print("[TV][WARN] Calendar container not found; skipping image to avoid bad post.")
+        await page.close()
+        return False
 
+    await container.screenshot(path=TV_CAL_PNG)
     print(f"[TV][OK] Saved: {TV_CAL_PNG}")
     await page.close()
     return True
+
 
 async def main():
     async with async_playwright() as p:
@@ -245,3 +321,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
