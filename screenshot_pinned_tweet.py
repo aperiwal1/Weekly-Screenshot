@@ -1,12 +1,15 @@
 import asyncio
 import os
-import requests
 from playwright.async_api import async_playwright
 from datetime import datetime
 
+# Save into "site/" so GitHub Pages can publish it
+OUTPUT_DIR = "site"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
 async def screenshot_pinned_tweet():
-    date_str = datetime.now().strftime('%Y-%m-%d')
-    filepath = f"pinned_tweet_{date_str}.png"
+    # Stable file name so the URL stays the same week to week
+    filepath = os.path.join(OUTPUT_DIR, "pinned_tweet.png")
 
     url = "https://x.com/eWhispers"
 
@@ -24,33 +27,19 @@ async def screenshot_pinned_tweet():
 
         print("Navigating to X page...")
         await page.goto(url)
-        await asyncio.sleep(6)  # Let the page load
+        await asyncio.sleep(6)
 
         print("Locating pinned tweet...")
-        tweet = await page.query_selector('article')  # First visible post
-        if tweet:
-            await tweet.screenshot(path=filepath)
-            print(f"Screenshot saved: {filepath}")
-        else:
-            print("Pinned tweet not found.")
+        tweet = await page.query_selector('article')
+        if not tweet:
+            print("[ERROR] Pinned tweet not found.")
+            await browser.close()
             return
+
+        await tweet.screenshot(path=filepath)
+        print(f"[SUCCESS] Screenshot saved: {filepath}")
 
         await browser.close()
 
-    # === Upload to Slack ===
-    webhook_url = os.environ.get("SLACK_WEBHOOK")
-    if webhook_url:
-        response = requests.post(
-            webhook_url,
-            json={"text": f"Weekly pinned tweet screenshot captured: {filepath}"}
-        )
-        if response.status_code == 200:
-            print("✅ Message posted to Slack successfully.")
-        else:
-            print(f"❌ Failed to post to Slack: {response.status_code} {response.text}")
-    else:
-        print("⚠️ No Slack webhook found in environment variables.")
-
 if __name__ == "__main__":
     asyncio.run(screenshot_pinned_tweet())
-
