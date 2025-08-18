@@ -40,18 +40,17 @@ async def screenshot_pinned_tweet():
     # === Upload to Slack ===
     webhook_url = os.environ.get("SLACK_WEBHOOK")
     if webhook_url:
-        with open(filepath, 'rb') as f:
-            response = requests.post(
-                webhook_url,
-                files={'file': f},
-                data={'filename': filepath, 'title': 'Weekly Pinned Tweet Screenshot'}
-            )
-            if response.status_code == 200:
-                print("✅ Uploaded to Slack successfully.")
-            else:
-                print(f"❌ Failed to upload to Slack: {response.status_code} {response.text}")
+        response = requests.post(
+            webhook_url,
+            json={"text": f"Weekly pinned tweet screenshot captured: {filepath}"}
+        )
+        if response.status_code == 200:
+            print("✅ Message posted to Slack successfully.")
+        else:
+            print(f"❌ Failed to post to Slack: {response.status_code} {response.text}")
     else:
         print("⚠️ No Slack webhook found in environment variables.")
 
 if __name__ == "__main__":
     asyncio.run(screenshot_pinned_tweet())
+
