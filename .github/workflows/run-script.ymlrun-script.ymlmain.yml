@@ -52,15 +52,34 @@ jobs:
     env:
       SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
     steps:
-      - name: Post image link to Slack (inline preview)
+      - name: Post images to Slack via webhook (inline)
         run: |
-          # Build the public image URL served by GitHub Pages
-          REPO_FULL="${GITHUB_REPOSITORY}"                # owner/repo
-          OWNER="${REPO_FULL%%/*}"                        # owner
-          REPO="${REPO_FULL##*/}"                         # repo
-          IMAGE_URL="https://${OWNER}.github.io/${REPO}/pinned_tweet.png"
+          REPO_FULL="${GITHUB_REPOSITORY}"        # owner/repo
+          OWNER="${REPO_FULL%%/*}"                # owner
+          REPO="${REPO_FULL##*/}"                 # repo
 
-          # Send a webhook payload with image_url so Slack shows it inline
+          TWEET_URL="https://${OWNER}.github.io/${REPO}/pinned_tweet.png"
+          FF_URL="https://${OWNER}.github.io/${REPO}/forexfactory_usd_cad_high.png"
+
+          read -r -d '' PAYLOAD << 'JSON'
+          {
+            "text": "Earnings and Economic Calendar for the week - For internal use only",
+            "attachments": [
+              {
+                "title": "Pinned Tweet (Earnings)",
+                "image_url": "REPLACE_TWEET_URL"
+              },
+              {
+                "title": "Economic Calendar (ForexFactory: High impact, USD & CAD)",
+                "image_url": "REPLACE_FF_URL"
+              }
+            ]
+          }
+          JSON
+
+          PAYLOAD="${PAYLOAD/REPLACE_TWEET_URL/$TWEET_URL}"
+          PAYLOAD="${PAYLOAD/REPLACE_FF_URL/$FF_URL}"
+
           curl -X POST -H 'Content-type: application/json' \
-            --data "{\"attachments\":[{\"title\":\"Weekly Pinned Tweet\",\"image_url\":\"${IMAGE_URL}\"}]}" \
+            --data "${PAYLOAD}" \
             "${SLACK_WEBHOOK}"
