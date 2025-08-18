@@ -46,45 +46,45 @@ jobs:
         id: deploy
         uses: actions/deploy-pages@v4
 
-notify-slack:
-  needs: deploy
-  runs-on: ubuntu-latest
-  env:
-    SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-  steps:
-    - name: Build Slack payload and post
-      run: |
-        set -euo pipefail
-
-        # Derive public GitHub Pages URLs for the images
-        OWNER="${GITHUB_REPOSITORY%%/*}"
-        REPO="${GITHUB_REPOSITORY##*/}"
-        TWEET_URL="https://${OWNER}.github.io/${REPO}/pinned_tweet.png"
-        FF_URL="https://${OWNER}.github.io/${REPO}/forexfactory_usd_cad_high.png"
-
-        # Create JSON payload with placeholders
-        cat > payload.json <<'JSON'
-        {
-          "text": "Earnings and Economic Calendar for the week - For internal use only",
-          "attachments": [
-            {
-              "title": "Pinned Tweet (Earnings)",
-              "image_url": "__TWEET_URL__"
-            },
-            {
-              "title": "Economic Calendar (ForexFactory: High impact, USD & CAD)",
-              "image_url": "__FF_URL__"
-            }
-          ]
-        }
-        JSON
-
-        # Substitute placeholders with actual URLs
-        sed -i "s|__TWEET_URL__|${TWEET_URL}|g" payload.json
-        sed -i "s|__FF_URL__|${FF_URL}|g" payload.json
-
-        # Post to Slack via Incoming Webhook
-        curl -sS -X POST -H 'Content-type: application/json' \
-          --data @payload.json \
-          "${SLACK_WEBHOOK}"
+  notify-slack:
+    needs: deploy
+    runs-on: ubuntu-latest
+    env:
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+    steps:
+      - name: Build Slack payload and post
+        run: |
+          set -euo pipefail
+  
+          # Derive public GitHub Pages URLs for the images
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          REPO="${GITHUB_REPOSITORY##*/}"
+          TWEET_URL="https://${OWNER}.github.io/${REPO}/pinned_tweet.png"
+          FF_URL="https://${OWNER}.github.io/${REPO}/forexfactory_usd_cad_high.png"
+  
+          # Create JSON payload with placeholders
+          cat > payload.json <<'JSON'
+          {
+            "text": "Earnings and Economic Calendar for the week - For internal use only",
+            "attachments": [
+              {
+                "title": "Pinned Tweet (Earnings)",
+                "image_url": "__TWEET_URL__"
+              },
+              {
+                "title": "Economic Calendar (ForexFactory: High impact, USD & CAD)",
+                "image_url": "__FF_URL__"
+              }
+            ]
+          }
+          JSON
+  
+          # Substitute placeholders with actual URLs
+          sed -i "s|__TWEET_URL__|${TWEET_URL}|g" payload.json
+          sed -i "s|__FF_URL__|${FF_URL}|g" payload.json
+  
+          # Post to Slack via Incoming Webhook
+          curl -sS -X POST -H 'Content-type: application/json' \
+            --data @payload.json \
+            "${SLACK_WEBHOOK}"
 
