@@ -30,8 +30,6 @@ jobs:
           playwright install --with-deps chromium
 
       - name: Run screenshot script (outputs to site/)
-        env:
-          TE_API_KEY: ${{ secrets.TE_API_KEY }}
         run: python screenshot_pinned_tweet.py
 
       - name: Inspect site/ output (debug)
@@ -69,22 +67,30 @@ jobs:
           BASE_URL="https://${OWNER}.github.io/${REPO}"
 
           TWEET_URL="${BASE_URL}/pinned_tweet.png"
-          TV_URL="${BASE_URL}/tradingview_usd_cad_high.png"
+          FXS_URL="${BASE_URL}/fxstreet_usd_cad_high.png"
 
+          # Build payload with both images (Slack will render them inline)
           cat > payload.json <<'JSON'
           {
             "text": "Earnings and Economic Calendar for the week - For internal use only",
             "attachments": [
-              { "title": "Pinned Tweet (Earnings)", "image_url": "__TWEET_URL__" },
-              { "title": "Economic Calendar (TradingView: High, USD & CAD, This Week)", "image_url": "__TV_URL__" }
+              {
+                "title": "Pinned Tweet (Earnings)",
+                "image_url": "__TWEET_URL__"
+              },
+              {
+                "title": "Economic Calendar (FXStreet: High, USD & CAD, This Week)",
+                "image_url": "__FXS_URL__"
+              }
             ]
           }
           JSON
 
+          # Substitute URLs
           sed -i "s|__TWEET_URL__|${TWEET_URL}|g" payload.json
-          sed -i "s|__TV_URL__|${TV_URL}|g" payload.json
+          sed -i "s|__FXS_URL__|${FXS_URL}|g" payload.json
 
+          # Post to Slack
           curl -sS -X POST -H 'Content-type: application/json' \
             --data @payload.json \
             "${SLACK_WEBHOOK}"
-
