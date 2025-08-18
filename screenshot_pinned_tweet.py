@@ -1,190 +1,245 @@
 import asyncio
 import os
-import json
-import math
-import requests
-from datetime import datetime, timedelta
 from playwright.async_api import async_playwright
 
 OUTPUT_DIR = "site"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 PINNED_TWEET_PNG = os.path.join(OUTPUT_DIR, "pinned_tweet.png")
-TE_CAL_PNG       = os.path.join(OUTPUT_DIR, "te_usd_cad_high.png")
+TV_CAL_PNG       = os.path.join(OUTPUT_DIR, "tradingview_usd_cad_high.png")
 
-def _monday_of_week(d):
-    return d - timedelta(days=d.weekday())
+# ---------- Helpers ----------
 
-def _sunday_of_week(d):
-    return _monday_of_week(d) + timedelta(days=6)
-
-def fetch_te_events_for_week(api_key: str):
-    """United States + Canada, this week, importance=High."""
-    today = datetime.utcnow().date()
-    start = _monday_of_week(today)
-    end   = _sunday_of_week(today)
-    start_s = start.strftime("%Y-%m-%d")
-    end_s   = end.strftime("%Y-%m-%d")
-
-    # By country + importance + date range (see TE docs)
-    countries = ["united%20states", "canada"]
-    all_rows = []
-    for ctry in countries:
-        url = (
-            f"https://api.tradingeconomics.com/calendar/country/{ctry}"
-            f"/importance/high?d1={start_s}&d2={end_s}&c={api_key}"
-        )
-        r = requests.get(url, timeout=20)
-        r.raise_for_status()
-        data = r.json()
-        if isinstance(data, dict) and "error" in data:
-            raise RuntimeError(f"TE API error for {ctry}: {data['error']}")
-        all_rows.extend(data)
-    return all_rows, start_s, end_s
-
-def html_for_events(events, start_s, end_s):
-    # Normalize & sort by date/time
-    def parse_dt(e):
-        # TE fields often: 'DateUTC' or 'Date' + 'Time'
-        # Try several keys safely.
-        dt_s = e.get("DateUTC") or e.get("Date") or ""
+async def safe_click(page, selectors, timeout=4000):
+    """Try a list of selectors until one clicks."""
+    for sel in selectors:
         try:
-            return datetime.fromisoformat(dt_s.replace("Z", "+00:00"))
-        except Exception:
-            return datetime.min
-
-    events = sorted(events, key=parse_dt)
-
-    # Build neat, print-friendly HTML (simple CSS)
-    rows = []
-    for e in events:
-        country = e.get("Country", "")
-        event   = e.get("Event", "") or e.get("Category", "")
-        time    = e.get("DateUTC") or e.get("Date") or ""
-        actual  = e.get("Actual", "")
-        forecast= e.get("Forecast", "")
-        previous= e.get("Previous", "")
-        tznote  = "UTC"
-
-        # Friendly time
-        try:
-            dt = datetime.fromisoformat(time.replace("Z", "+00:00"))
-            time_disp = dt.strftime("%a %b %d, %H:%M")
+            await page.locator(sel).first.click(timeout=timeout)
+            return True
         except:
-            time_disp = time
+            try:
+                # try get_by_role name match variant "role|name" tuple
+                if isinstance(sel, tuple) and sel and sel[0] == "role":
+                    _, role, name = sel
+                    await page.get_by_role(role, name=name).click(timeout=timeout)
+                    return True
+            except:
+                pass
+    return False
 
-        rows.append(f"""
-          <tr>
-            <td>{country}</td>
-            <td>{time_disp} <span class="tz">{tznote}</span></td>
-            <td>{event}</td>
-            <td>{forecast}</td>
-            <td>{previous}</td>
-            <td>{actual}</td>
-          </tr>
-        """)
+async def safe_check(page, selectors, timeout=4000):
+    for sel in selectors:
+        try:
+            await page.locator(sel).first.check(timeout=timeout)
+            return True
+        except:
+            try:
+                if isinstance(sel, tuple) and sel and sel[0] == "role":
+                    _, role, name = sel
+                    await page.get_by_role(role, name=name).check(timeout=timeout)
+                    return True
+            except:
+                pass
+    return False
 
-    empty_msg = ""
-    if not rows:
-        empty_msg = "<p class='empty'>No High-impact events for USD/CAD this week.</p>"
+# ---------- Captures ----------
 
-    html = f"""
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8" />
-<title>High Impact: USD & CAD ({start_s} – {end_s})</title>
-<style>
-  body {{ font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }}
-  h1 {{ font-size: 20px; margin: 0 0 4px; }}
-  h2 {{ font-size: 13px; color: #666; margin: 0 0 16px; }}
-  table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
-  th, td {{ padding: 8px 10px; border-bottom: 1px solid #eaeaea; vertical-align: top; }}
-  th {{ text-align: left; background: #fafafa; }}
-  tr:nth-child(even) td {{ background: #fcfcfc; }}
-  .tz {{ color: #999; font-size: 11px; margin-left: 4px; }}
-  .empty {{ color: #999; font-style: italic; margin-top: 12px; }}
-  .badge {{ display:inline-block; padding:2px 6px; font-size:11px; background:#fee; color:#b00; border:1px solid #f88; border-radius:8px; margin-left:6px; }}
-  .foot {{ margin-top:10px; color:#999; font-size:11px; }}
-</style>
-</head>
-<body>
-  <h1>High-Impact Economic Events — USD & CAD</h1>
-  <h2>Week: {start_s} to {end_s}<span class="badge">Source: TradingEconomics</span></h2>
-  {empty_msg}
-  <table>
-    <thead>
-      <tr>
-        <th>Country</th>
-        <th>When</th>
-        <th>Event</th>
-        <th>Forecast</th>
-        <th>Previous</th>
-        <th>Actual</th>
-      </tr>
-    </thead>
-    <tbody>
-      {''.join(rows)}
-    </tbody>
-  </table>
-  <div class="foot">Times shown in UTC. Importance: High only. Countries: United States, Canada.</div>
-</body>
-</html>
-    """
-    return html
-
-async def render_te_calendar_image(context, html):
-    # Render HTML to an image using Playwright
-    page = await context.new_page()
-    await page.set_content(html, wait_until="load")
-    # Make sure it's tall enough
-    total = await page.evaluate("document.body.scrollHeight")
-    height = max(800, min(total, 4000))
-    await page.set_viewport_size({"width": 1200, "height": height})
-    await asyncio.sleep(0.5)
-    await page.screenshot(path=TE_CAL_PNG, full_page=True)
-    await page.close()
-
-async def capture_pinned_tweet_image(context):
+async def capture_pinned_tweet(context):
     page = await context.new_page()
     print("[Pinned] Navigating…")
     await page.goto("https://x.com/eWhispers")
     await asyncio.sleep(6)
+
+    print("[Pinned] Locating first tweet (pinned)…")
     tweet = await page.query_selector("article")
-    if tweet:
-        await tweet.screenshot(path=PINNED_TWEET_PNG)
-        print(f"[Pinned][OK] Saved: {PINNED_TWEET_PNG}")
-    else:
+    if not tweet:
         print("[Pinned][WARN] Pinned tweet not found; skipping.")
+        await page.close()
+        return False
+
+    await tweet.screenshot(path=PINNED_TWEET_PNG)
+    print(f"[Pinned][OK] Saved: {PINNED_TWEET_PNG}")
     await page.close()
+    return True
+
+async def capture_tradingview_calendar(context):
+    """
+    TradingView economic calendar, filters:
+      - Date range: This week
+      - Importance: High
+      - Currencies: USD + CAD
+    """
+    # Try two known calendar URLs; first one usually works.
+    urls = [
+        "https://www.tradingview.com/markets/economic-calendar/",
+        "https://www.tradingview.com/economic-calendar/"
+    ]
+
+    page = await context.new_page()
+
+    loaded = False
+    for url in urls:
+        print(f"[TV] Navigating… {url}")
+        await page.goto(url)
+        await asyncio.sleep(6)
+
+        # Accept cookies if shown (best-effort)
+        for sel in [
+            'button:has-text("Accept all")',
+            'button:has-text("Accept All")',
+            'button:has-text("I accept")',
+            'button:has-text("Agree")',
+            ('role', 'button', 'Accept'),
+        ]:
+            if await safe_click(page, [sel], timeout=2000):
+                await asyncio.sleep(1)
+                break
+
+        # Heuristic: look for the calendar container to confirm page shape
+        if await page.query_selector("section:has(table), div:has(table), main"):
+            loaded = True
+            break
+
+    if not loaded:
+        print("[TV][WARN] Calendar shell not detected; will still attempt filters.")
+
+    # Open filters / settings
+    print("[TV] Opening filters/settings…")
+    opened = await safe_click(page, [
+        ('role', 'button', 'Filter'),
+        'button:has-text("Filter")',
+        'button:has-text("Filters")',
+        'button[aria-label*="Filter"]',
+        'button[title*="Filter"]',
+        'button:has(svg)',
+    ], timeout=4000)
+    if not opened:
+        print("[TV][WARN] Could not find Filters button. Continuing anyway.")
+
+    await asyncio.sleep(1)
+
+    # Date range: "This week"
+    print("[TV] Setting date range: This week…")
+    date_set = False
+    # Open date menu if present
+    if await safe_click(page, [
+        ('role', 'button', 'Date'), 'button:has-text("Date")',
+        'button[aria-label*="Date"]', '[data-name*="date"]'
+    ], timeout=1500):
+        await asyncio.sleep(0.5)
+        date_set = await safe_click(page, [
+            ('role', 'option', 'This week'),
+            'div[role="option"]:has-text("This week")',
+            'li:has-text("This week")',
+            'button:has-text("This week")'
+        ], timeout=2000)
+    else:
+        # Some UIs expose quick chips directly
+        date_set = await safe_click(page, [
+            'button:has-text("This week")',
+            ('role', 'button', 'This week')
+        ], timeout=2000)
+
+    if not date_set:
+        print("[TV][WARN] Date range 'This week' not set.")
+
+    # Importance: High only
+    print("[TV] Selecting Impact: High…")
+    imp_ok = (
+        await safe_click(page, [
+            ('role', 'button', 'Importance'),
+            'button:has-text("Importance")',
+            '[data-name*="importance"]',
+        ], timeout=1500)
+        or True  # sometimes chips already visible
+    )
+    # Now choose High
+    high_ok = await safe_click(page, [
+        ('role', 'checkbox', 'High'),
+        'label:has-text("High")',
+        'button:has-text("High")',
+        '[aria-label*="High"]',
+    ], timeout=2000)
+    if not high_ok:
+        print("[TV][WARN] Could not confirm High selection.")
+
+    # Currencies: USD + CAD
+    print("[TV] Selecting currencies: USD + CAD…")
+    # Sometimes there's a "Currencies" filter, or a search box.
+    # Try opening currency filter panel:
+    await safe_click(page, [
+        ('role', 'button', 'Currency'),
+        'button:has-text("Currency")',
+        'button:has-text("Currencies")',
+        '[data-name*="currency"]',
+    ], timeout=1500)
+    await asyncio.sleep(0.3)
+
+    for curr in ["USD", "CAD"]:
+        ok = (
+            await safe_check(page, [
+                ('role', 'checkbox', curr),
+                f'label:has-text("{curr}")'
+            ], timeout=1500)
+            or await safe_click(page, [
+                f'button:has-text("{curr}")',
+                f'[aria-label*="{curr}"]',
+                f'div:has-text("{curr}")'
+            ], timeout=1500)
+        )
+        if not ok:
+            print(f"[TV][WARN] Could not select currency: {curr}")
+
+    # Apply / close filters if there’s an explicit button
+    await safe_click(page, [
+        'button:has-text("Apply")',
+        ('role', 'button', 'Apply'),
+        'button:has-text("Done")',
+        ('role', 'button', 'Done'),
+        'button:has-text("Close")'
+    ], timeout=1500)
+    await asyncio.sleep(2)
+
+    # Try to target the calendar list/table container to screenshot
+    print("[TV] Capturing screenshot…")
+    saved = False
+    for sel in [
+        'section:has(table)',        # generic section wrapping a table
+        'div:has(table)',
+        'main',
+        '#root',
+    ]:
+        try:
+            el = await page.query_selector(sel)
+            if el:
+                await el.screenshot(path=TV_CAL_PNG)
+                saved = True
+                break
+        except:
+            pass
+
+    if not saved:
+        await page.screenshot(path=TV_CAL_PNG, full_page=True)
+
+    print(f"[TV][OK] Saved: {TV_CAL_PNG}")
+    await page.close()
+    return True
 
 async def main():
-    te_api_key = os.environ.get("TE_API_KEY")  # set in GitHub secrets
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
-            viewport={'width': 1200, 'height': 1200},
+            viewport={'width': 1600, 'height': 1600},
             user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) "
                         "Chrome/120.0.0.0 Safari/537.36")
         )
 
-        # 1) Earnings via pinned tweet
-        await capture_pinned_tweet_image(context)
+        # 1) Pinned tweet (earnings)
+        await capture_pinned_tweet(context)
 
-        # 2) Economic calendar via TradingEconomics API
-        try:
-            if not te_api_key:
-                raise RuntimeError("Missing TE_API_KEY")
-            events, d1, d2 = fetch_te_events_for_week(te_api_key)
-            html = html_for_events(events, d1, d2)
-            await render_te_calendar_image(context, html)
-            print(f"[TE][OK] Saved: {TE_CAL_PNG}")
-        except Exception as e:
-            print(f"[TE][ERROR] {e}")
-            # Ensure a placeholder is still generated to avoid breaking Slack
-            with open(os.path.join(OUTPUT_DIR, "te_error.txt"), "w") as f:
-                f.write(str(e))
+        # 2) TradingView calendar (This week, High, USD + CAD)
+        await capture_tradingview_calendar(context)
 
         await browser.close()
 
