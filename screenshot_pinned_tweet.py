@@ -69,6 +69,7 @@ async def capture_fxstreet_calendar(context):
       - Date: This week
       - Countries: United States, Canada
       - Impact: High only
+    Also: auto-scroll to load the full week, then crop the top portion.
     """
     url = "https://www.fxstreet.com/economic-calendar"
     page = await context.new_page()
@@ -102,38 +103,36 @@ async def capture_fxstreet_calendar(context):
     ], timeout=3000)
     if not opened:
         print("[FXS][WARN] Could not open Filter panel; capturing unfiltered view.")
-        # fallback: capture visible calendar area
-        await capture_fxstreet_container(page)
+        await capture_fxstreet_container(page, crop_height=1200)
         await page.close()
         return True
-
     await asyncio.sleep(0.6)
 
     # ---- Date range: This week ----
     print("[FXS] Setting Date: This week…")
-    # Try opening date control
     await safe_click(page, [
         ('role', 'button', 'Date'),
         'button:has-text("Date")',
         '[data-testid*="date"]',
         'button[aria-label*="Date"]'
-    ], timeout=1200)
+    ], timeout=1500)
     await asyncio.sleep(0.3)
-    await safe_click(page, [
+    set_week = await safe_click(page, [
         ('role', 'option', 'This week'),
         'div[role="option"]:has-text("This week")',
         'li:has-text("This week")',
         'button:has-text("This week")'
-    ], timeout=1500)
+    ], timeout=2000)
+    if not set_week:
+        print("[FXS][WARN] Could not explicitly set 'This week'.")
 
     # ---- Impact: High only ----
     print("[FXS] Selecting Impact: High…")
-    # Open impact filter (if it requires expand)
     await safe_click(page, [
         ('role', 'button', 'Impact'),
         'button:has-text("Impact")',
         '[data-testid*="impact"]',
-    ], timeout=1200)
+    ], timeout=1500)
     await asyncio.sleep(0.2)
     # Unselect lower impact if selected
     for low in ["Low", "Medium"]:
@@ -142,7 +141,7 @@ async def capture_fxstreet_calendar(context):
             f'label:has-text("{low}")',
             f'button:has-text("{low}")'
         ], timeout=800)
-    # Ensure High is selected
+    # Ensure High is ON
     await safe_check(page, [
         ('role', 'checkbox', 'High'),
         'label:has-text("High")',
@@ -152,23 +151,21 @@ async def capture_fxstreet_calendar(context):
 
     # ---- Countries: United States, Canada ----
     print("[FXS] Selecting Countries: United States + Canada…")
-    # Open countries control
     await safe_click(page, [
         ('role', 'button', 'Country'),
         'button:has-text("Country")',
         'button:has-text("Countries")',
         '[data-testid*="country"]',
-    ], timeout=1200)
+    ], timeout=1500)
     await asyncio.sleep(0.2)
 
-    # Clear any preselected (try common 'Clear all' pattern)
+    # Clear any preselected (best-effort)
     await safe_click(page, [
         'button:has-text("Clear")',
         'button:has-text("Clear all")',
         'button:has-text("Reset")',
     ], timeout=800)
 
-    # Select the two countries
     for name in ["United States", "Canada"]:
         ok = await safe_check(page, [
             ('role', 'checkbox', name),
@@ -179,7 +176,7 @@ async def capture_fxstreet_calendar(context):
         if not ok:
             print(f"[FXS][WARN] Could not select country: {name}")
 
-    # Apply / Close filter panel
+    # Apply filters
     print("[FXS] Applying filters…")
     await safe_click(page, [
         'button:has-text("Apply")',
@@ -187,19 +184,74 @@ async def capture_fxstreet_calendar(context):
         'button:has-text("Done")',
         ('role', 'button', 'Done'),
         'button:has-text("Close")'
-    ], timeout=1500)
+    ], timeout=2000)
     await asyncio.sleep(2)
 
-    # Capture the calendar area
-    await capture_fxstreet_container(page)
+    # ---- Ensure full week is loaded (lazy-load on scroll) ----
+    print("[FXS] Ensuring full week is loaded…")
+    # Scroll container (if exists) else scroll page
+    scroll_script = """
+      (function() {
+        const el =
+          document.querySelector('section:has(table)') ||
+          document.querySelector('div:has(table)') ||
+          document.querySelector('[data-testid*="calendar"]') ||
+          document.querySelector('main') ||
+          document.scrollingElement;
+        let atBottom = false;
+        window.__calEl = el;
+        return !!el;
+      })();
+    """
+    has_container = await page.evaluate(scroll_script)
+    if not has_container:
+        print("[FXS][WARN] Could not find calendar container; scrolling whole page.")
+    # Scroll down in steps to load more, look for late-week markers
+    saw_late_week = False
+    for i in range(12):
+        try:
+            await page.evaluate("""
+              (function() {
+                const el = window.__calEl || document.scrollingElement;
+                el.scrollBy({ top: window.innerHeight, behavior: 'instant' });
+              })();
+            """)
+        except:
+            pass
+        await asyncio.sleep(0.7)
+
+        # Heuristic: if we see Thu/Fri in viewport text, assume full week loaded
+        text_snip = (await page.content())[:200000].lower()
+        if any(day in text_snip for day in ["thu", "fri", "sat", "sun"]):
+            saw_late_week = True
+            break
+
+    # Scroll back to top for a clean top crop
+    try:
+        await page.evaluate("""
+          (function() {
+            const el = window.__calEl || document.scrollingElement;
+            el.scrollTo({ top: 0, behavior: 'instant' });
+          })();
+        """)
+    except:
+        pass
+    await asyncio.sleep(0.6)
+
+    # Capture the calendar area, cropped to top N pixels
+    await capture_fxstreet_container(page, crop_height=1200)
     await page.close()
     return True
 
-async def capture_fxstreet_container(page):
+async def capture_fxstreet_container(page, crop_height=1200):
+    """
+    Screenshot the calendar container (preferred) or full page.
+    If crop_height is provided, crop to the top part only.
+    """
     print("[FXS] Capturing calendar area…")
-    saved = False
+    container = None
     for sel in [
-        'section:has(table)',     # common wrapper of the list
+        'section:has(table)',
         'div:has(table)',
         '[data-testid*="calendar"]',
         'main',
@@ -208,14 +260,37 @@ async def capture_fxstreet_container(page):
         try:
             el = await page.query_selector(sel)
             if el:
-                await el.screenshot(path=FXS_CAL_PNG)
-                saved = True
+                container = el
                 break
         except:
             pass
-    if not saved:
+
+    if not container:
+        # fallback: full page crop from top
+        if crop_height:
+            clip = {"x": 0, "y": 0, "width": 1600, "height": crop_height}
+            await page.screenshot(path=FXS_CAL_PNG, clip=clip)
+        else:
+            await page.screenshot(path=FXS_CAL_PNG, full_page=True)
+        print(f"[FXS][OK] Saved (fallback): {FXS_CAL_PNG}")
+        return
+
+    # Use element bbox and crop to top N px
+    box = await container.bounding_box()
+    if not box:
         await page.screenshot(path=FXS_CAL_PNG, full_page=True)
-    print(f"[FXS][OK] Saved: {FXS_CAL_PNG}")
+        print(f"[FXS][OK] Saved (bbox fallback): {FXS_CAL_PNG}")
+        return
+
+    top_height = crop_height if crop_height else box["height"]
+    clip = {
+        "x": math.floor(box["x"]),
+        "y": math.floor(box["y"]),
+        "width": math.floor(box["width"]),
+        "height": math.floor(min(box["height"], top_height))
+    }
+    await page.screenshot(path=FXS_CAL_PNG, clip=clip)
+    print(f"[FXS][OK] Saved (cropped): {FXS_CAL_PNG}")
 
 async def main():
     async with async_playwright() as p:
@@ -234,3 +309,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
