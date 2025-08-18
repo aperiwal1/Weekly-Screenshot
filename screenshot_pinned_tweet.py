@@ -14,28 +14,41 @@ async def capture_pinned_tweet(page):
     print("[Pinned] Navigating…")
     await page.goto(url)
     await asyncio.sleep(6)
-
     print("[Pinned] Locating first tweet (pinned)…")
     tweet = await page.query_selector("article")
     if not tweet:
         print("[Pinned][ERROR] Could not find pinned tweet.")
         return False
-
     await tweet.screenshot(path=PINNED_TWEET_PNG)
     print(f"[Pinned][OK] Saved: {PINNED_TWEET_PNG}")
     return True
 
+async def ff_take_any_screenshot(page):
+    """Always save something to FF_CAL_PNG (calendar section if possible; otherwise full page)."""
+    print("[FF] Fallback capture of calendar…")
+    # Try common containers first
+    for sel in ['div.calendar__table', 'main', '[data-ff="calendar"]', '#calendars', '.calendar']:
+        try:
+            el = await page.query_selector(sel)
+            if el:
+                await el.screenshot(path=FF_CAL_PNG)
+                print(f"[FF][OK] Saved (container): {FF_CAL_PNG}")
+                return True
+        except:
+            pass
+    # Full page fallback
+    await page.screenshot(path=FF_CAL_PNG, full_page=True)
+    print(f"[FF][OK] Saved (full page): {FF_CAL_PNG}")
+    return True
+
 async def capture_forexfactory_filtered(context):
-    """
-    Filters: Impact = High only, Currencies = USD + CAD, on 'this week' view.
-    """
     url = "https://www.forexfactory.com/calendar?week=this"
     page = await context.new_page()
     print("[FF] Navigating…")
     await page.goto(url)
-    await asyncio.sleep(5)
+    await asyncio.sleep(6)
 
-    # Handle cookie consent if present (best-effort)
+    # Try cookie/consent
     for sel in [
         'text="Accept All"', 'text="Accept all"', 'text="I Accept"', 'text="Agree"', 
         'button:has-text("Accept")'
@@ -45,121 +58,109 @@ async def capture_forexfactory_filtered(context):
             if btn:
                 await btn.click()
                 await asyncio.sleep(1)
+                print("[FF] Accepted cookies.")
                 break
         except:
             pass
 
-    # Open Filters (use robust role-based locator first)
+    # Try to open filters
     print("[FF] Opening filters…")
     opened = False
     try:
-        await page.get_by_role("button", name=lambda n: n and "filter" in n.lower()).click(timeout=5000)
+        await page.get_by_role("button", name=lambda n: n and "filter" in n.lower()).click(timeout=4000)
         opened = True
     except:
-        # fallback 1: visible text
-        try:
-            await page.locator('button:has-text("Filter")').first.click(timeout=5000)
-            opened = True
-        except:
-            # fallback 2: any button with funnel icon-like class name
+        for sel in ['button:has-text("Filter")', 'button[class*="filter"]', '[aria-label*="Filter"]', '[title*="Filter"]']:
             try:
-                await page.locator('button[class*="filter"]').first.click(timeout=5000)
+                await page.locator(sel).first.click(timeout=3000)
                 opened = True
+                break
             except:
-                pass
+                continue
 
     if not opened:
-        print("[FF][ERROR] Could not open the Filters panel.")
+        print("[FF][WARN] Could not open Filters panel. Capturing without filters.")
+        ok = await ff_take_any_screenshot(page)
         await page.close()
-        return False
+        return ok
 
     await asyncio.sleep(1)
 
-    # Clear all first (so only our choices apply)
+    # Clear all
     print("[FF] Clearing all filters…")
-    try:
-        # There can be multiple 'Clear All'—click the first visible one
-        await page.locator('text=Clear All').first.click(timeout=5000)
-        await asyncio.sleep(1)
-    except:
-        print("[FF] 'Clear All' not found; continuing.")
+    cleared = False
+    for sel in ['text=Clear All', 'button:has-text("Clear All")']:
+        try:
+            await page.locator(sel).first.click(timeout=3000)
+            cleared = True
+            await asyncio.sleep(1)
+            break
+        except:
+            continue
+    if not cleared:
+        print("[FF][WARN] Clear All not found, continuing anyway.")
 
-    # Select currencies USD & CAD
+    # Select USD + CAD
     print("[FF] Selecting currencies USD + CAD…")
-    # Try label text and checkbox roles robustly
     for curr in ["USD", "CAD"]:
         selected = False
         try:
-            await page.locator(f'label:has-text("{curr}")').first.click(timeout=3000)
+            await page.locator(f'label:has-text("{curr}")').first.click(timeout=2000)
             selected = True
         except:
             try:
-                await page.get_by_role("checkbox", name=curr).check(timeout=3000)
+                await page.get_by_role("checkbox", name=curr).check(timeout=2000)
                 selected = True
             except:
                 pass
         if not selected:
             print(f"[FF][WARN] Could not select currency: {curr}")
 
-    # Select Impact = High only (red)
+    # Impact = High only
     print("[FF] Selecting Impact: High…")
     impact_selected = False
     for name in ["High", "High Impact", "High (Red)"]:
         try:
-            await page.locator(f'label:has-text("{name}")').first.click(timeout=3000)
+            await page.locator(f'label:has-text("{name}")').first.click(timeout=2000)
             impact_selected = True
             break
         except:
             try:
-                await page.get_by_role("checkbox", name=lambda n: n and "high" in n.lower()).check(timeout=3000)
+                await page.get_by_role("checkbox", name=lambda n: n and "high" in n.lower()).check(timeout=2000)
                 impact_selected = True
                 break
             except:
                 pass
     if not impact_selected:
-        print("[FF][WARN] Could not positively confirm High impact selection.")
+        print("[FF][WARN] Could not confirm High impact selection.")
 
     # Apply filter
     print("[FF] Applying filter…")
     applied = False
-    for sel in ['text=Apply Filter', 'button:has-text("Apply Filter")']:
+    for sel in ['text=Apply Filter', 'button:has-text("Apply Filter")', '[type="submit"]:has-text("Apply")']:
         try:
-            await page.locator(sel).first.click(timeout=5000)
+            await page.locator(sel).first.click(timeout=3000)
             applied = True
             break
         except:
-            pass
-
+            continue
     if not applied:
-        print("[FF][ERROR] Could not find/apply the Apply Filter button.")
+        print("[FF][WARN] Could not click Apply Filter; capturing anyway.")
+        ok = await ff_take_any_screenshot(page)
         await page.close()
-        return False
+        return ok
 
-    await asyncio.sleep(3)
+    await asyncio.sleep(4)
 
-    # Try to screenshot the main calendar area (fallback to full page)
-    print("[FF] Capturing screenshot…")
-    saved = False
-    for cal_sel in [
-        'div.calendar__table',  # guess for a calendar container
-        'main',                 # main content
-        '[data-ff="calendar"]'  # hypothetical data attribute
-    ]:
-        try:
-            cal = await page.query_selector(cal_sel)
-            if cal:
-                await cal.screenshot(path=FF_CAL_PNG)
-                saved = True
-                break
-        except:
-            pass
+    # Ensure calendar area is visible (scroll to top just in case)
+    try:
+        await page.evaluate("window.scrollTo(0, 0)")
+    except:
+        pass
 
-    if not saved:
-        await page.screenshot(path=FF_CAL_PNG, full_page=True)
-
-    print(f"[FF][OK] Saved: {FF_CAL_PNG}")
+    ok = await ff_take_any_screenshot(page)
     await page.close()
-    return True
+    return ok
 
 async def main():
     async with async_playwright() as p:
@@ -178,7 +179,7 @@ async def main():
         await capture_pinned_tweet(page)
         await page.close()
 
-        # ForexFactory (USD, CAD, Impact High)
+        # ForexFactory calendar
         await capture_forexfactory_filtered(context)
 
         await browser.close()
