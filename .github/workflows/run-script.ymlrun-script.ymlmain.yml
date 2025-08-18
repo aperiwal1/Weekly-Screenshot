@@ -46,40 +46,45 @@ jobs:
         id: deploy
         uses: actions/deploy-pages@v4
 
-  notify-slack:
-    needs: deploy
-    runs-on: ubuntu-latest
-    env:
-      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-    steps:
-      - name: Post images to Slack via webhook (inline)
-        run: |
-          REPO_FULL="${GITHUB_REPOSITORY}"        # owner/repo
-          OWNER="${REPO_FULL%%/*}"                # owner
-          REPO="${REPO_FULL##*/}"                 # repo
+notify-slack:
+  needs: deploy
+  runs-on: ubuntu-latest
+  env:
+    SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+  steps:
+    - name: Build Slack payload and post
+      run: |
+        set -euo pipefail
 
-          TWEET_URL="https://${OWNER}.github.io/${REPO}/pinned_tweet.png"
-          FF_URL="https://${OWNER}.github.io/${REPO}/forexfactory_usd_cad_high.png"
+        # Derive public GitHub Pages URLs for the images
+        OWNER="${GITHUB_REPOSITORY%%/*}"
+        REPO="${GITHUB_REPOSITORY##*/}"
+        TWEET_URL="https://${OWNER}.github.io/${REPO}/pinned_tweet.png"
+        FF_URL="https://${OWNER}.github.io/${REPO}/forexfactory_usd_cad_high.png"
 
-          read -r -d '' PAYLOAD << 'JSON'
-          {
-            "text": "Earnings and Economic Calendar for the week - For internal use only",
-            "attachments": [
-              {
-                "title": "Pinned Tweet (Earnings)",
-                "image_url": "REPLACE_TWEET_URL"
-              },
-              {
-                "title": "Economic Calendar (ForexFactory: High impact, USD & CAD)",
-                "image_url": "REPLACE_FF_URL"
-              }
-            ]
-          }
-          JSON
+        # Create JSON payload with placeholders
+        cat > payload.json <<'JSON'
+        {
+          "text": "Earnings and Economic Calendar for the week - For internal use only",
+          "attachments": [
+            {
+              "title": "Pinned Tweet (Earnings)",
+              "image_url": "__TWEET_URL__"
+            },
+            {
+              "title": "Economic Calendar (ForexFactory: High impact, USD & CAD)",
+              "image_url": "__FF_URL__"
+            }
+          ]
+        }
+        JSON
 
-          PAYLOAD="${PAYLOAD/REPLACE_TWEET_URL/$TWEET_URL}"
-          PAYLOAD="${PAYLOAD/REPLACE_FF_URL/$FF_URL}"
+        # Substitute placeholders with actual URLs
+        sed -i "s|__TWEET_URL__|${TWEET_URL}|g" payload.json
+        sed -i "s|__FF_URL__|${FF_URL}|g" payload.json
 
-          curl -X POST -H 'Content-type: application/json' \
-            --data "${PAYLOAD}" \
-            "${SLACK_WEBHOOK}"
+        # Post to Slack via Incoming Webhook
+        curl -sS -X POST -H 'Content-type: application/json' \
+          --data @payload.json \
+          "${SLACK_WEBHOOK}"
+
