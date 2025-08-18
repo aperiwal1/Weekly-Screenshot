@@ -1,89 +1,66 @@
-name: Weekly pinned tweet → Slack
+name: Weekly Screenshot Bot (Pages + Slack)
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0 15 * * 1"  # Mondays 15:00 UTC
+    - cron: '0 12 * * 1'   # Every Monday 12:00 UTC = 8:00 AM America/Toronto
+  workflow_dispatch:
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
-
 jobs:
-  build-deploy-notify:
+  build:
     runs-on: ubuntu-latest
-    env:
-      SCREENSHOT_NAME: pinned_tweet.png
-      SITE_DIR: site
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Install Python deps
+      - name: Install dependencies
         run: |
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
 
-      - name: Generate screenshot
-        run: |
-          mkdir -p out
-          # Adjust the script/args below to your actual script and output
-          # Example:
-          # python scripts/grab_pinned_tweet.py --out out/$SCREENSHOT_NAME
-          # If your script already writes to out/pinned_tweet.png, leave as-is:
-          if [ ! -f out/$SCREENSHOT_NAME ]; then
-            echo "Expected screenshot out/$SCREENSHOT_NAME not found. Please update the script path in this step." >&2
-            exit 1
-          fi
-
-      - name: Prepare Pages content
-        run: |
-          mkdir -p "$SITE_DIR"
-          cp out/$SCREENSHOT_NAME "$SITE_DIR/$SCREENSHOT_NAME"
-          # Optional: also keep a dated archive copy
-          cp out/$SCREENSHOT_NAME "$SITE_DIR/pinned_tweet_$(date -u +%F).png"
-          # Minimal index (handy for manual browsing)
-          cat > "$SITE_DIR/index.html" << 'EOF'
-          <!doctype html><meta charset="utf-8"><title>Artifacts</title>
-          <h1>Latest pinned tweet</h1>
-          <p><a href="pinned_tweet.png">pinned_tweet.png</a></p>
-          EOF
+      - name: Run screenshot script (outputs to site/)
+        run: python screenshot_pinned_tweet.py
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ${{ env.SITE_DIR }}
+          path: ./site
 
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+    runs-on: ubuntu-latest
+    steps:
       - name: Deploy to GitHub Pages
-        id: deployment
+        id: deploy
         uses: actions/deploy-pages@v4
-        # environment info is set automatically by deploy-pages
 
-      - name: Post to Slack (Incoming Webhook)
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
-          IMG: ${{ env.SCREENSHOT_NAME }}
+  notify-slack:
+    needs: deploy
+    runs-on: ubuntu-latest
+    env:
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+    steps:
+      - name: Post image link to Slack (inline preview)
         run: |
-          # Build the public image URL and add a cache-buster to avoid Slack caching old versions
-          IMAGE_URL="${PAGE_URL%/}/$IMG?t=${{ github.run_id }}"
+          # Build the public image URL served by GitHub Pages
+          REPO_FULL="${GITHUB_REPOSITORY}"                # owner/repo
+          OWNER="${REPO_FULL%%/*}"                        # owner
+          REPO="${REPO_FULL##*/}"                         # repo
+          IMAGE_URL="https://${OWNER}.github.io/${REPO}/pinned_tweet.png"
 
-          # Prepare payload (use jq; it's preinstalled on ubuntu-latest)
-          PAYLOAD=$(jq -n --arg img "$IMAGE_URL" --arg title "Weekly Pinned Tweet" --arg fallback "Weekly pinned tweet screenshot" '{
-            attachments: [{
-              fallback: $fallback,
-              title: $title,
-              image_url: $img
-            }]
-          }')
-
-          curl -sS -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$SLACK_WEBHOOK_URL"
+          # Send a webhook payload with image_url so Slack shows it inline
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"attachments\":[{\"title\":\"Weekly Pinned Tweet\",\"image_url\":\"${IMAGE_URL}\"}]}" \
+            "${SLACK_WEBHOOK}"
