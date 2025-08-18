@@ -1,20 +1,17 @@
 import asyncio
+import os
+import requests
 from playwright.async_api import async_playwright
 from datetime import datetime
-import os
-
-# Output path
-OUTPUT_DIR = "screenshots"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 async def screenshot_pinned_tweet():
     date_str = datetime.now().strftime('%Y-%m-%d')
-    filepath = os.path.join(OUTPUT_DIR, f"eWhispers_pinned_{date_str}.png")
+    filepath = f"pinned_tweet_{date_str}.png"
 
     url = "https://x.com/eWhispers"
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
             viewport={'width': 1280, 'height': 1024},
             user_agent=(
@@ -27,29 +24,34 @@ async def screenshot_pinned_tweet():
 
         print("Navigating to X page...")
         await page.goto(url)
-        await asyncio.sleep(6)  # Wait instead of networkidle
+        await asyncio.sleep(6)  # Let the page load
 
-        # Accept cookies if needed
-        try:
-            await page.click('text=Accept all cookies')
-            print("Cookies accepted.")
-            await asyncio.sleep(1)
-        except:
-            print("No cookie popup.")
-
-        # Locate first tweet (pinned)
         print("Locating pinned tweet...")
-        try:
-            tweet = await page.query_selector('article')  # First visible post
-            if tweet:
-                await tweet.screenshot(path=filepath)
-                print(f"Pinned tweet screenshot saved to {filepath}")
-            else:
-                print("Pinned tweet not found.")
-        except Exception as e:
-            print(f"Error capturing tweet: {e}")
+        tweet = await page.query_selector('article')  # First visible post
+        if tweet:
+            await tweet.screenshot(path=filepath)
+            print(f"Screenshot saved: {filepath}")
+        else:
+            print("Pinned tweet not found.")
+            return
 
         await browser.close()
+
+    # === Upload to Slack ===
+    webhook_url = os.environ.get("SLACK_WEBHOOK")
+    if webhook_url:
+        with open(filepath, 'rb') as f:
+            response = requests.post(
+                webhook_url,
+                files={'file': f},
+                data={'filename': filepath, 'title': 'Weekly Pinned Tweet Screenshot'}
+            )
+            if response.status_code == 200:
+                print("✅ Uploaded to Slack successfully.")
+            else:
+                print(f"❌ Failed to upload to Slack: {response.status_code} {response.text}")
+    else:
+        print("⚠️ No Slack webhook found in environment variables.")
 
 if __name__ == "__main__":
     asyncio.run(screenshot_pinned_tweet())
