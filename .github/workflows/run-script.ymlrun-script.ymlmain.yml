@@ -66,31 +66,25 @@ jobs:
           REPO="${GITHUB_REPOSITORY##*/}"
           BASE_URL="https://${OWNER}.github.io/${REPO}"
 
-          TWEET_URL="${BASE_URL}/pinned_tweet.png"
-          FXS_URL="${BASE_URL}/fxstreet_usd_cad_high.png"
+          EARN_URL="${BASE_URL}/pinned_tweet.png"
+          TE_US_URL="${BASE_URL}/te_us_high.png"
+          TE_CA_URL="${BASE_URL}/te_ca_high.png"
 
-          # Build payload with both images (Slack will render them inline)
           cat > payload.json <<'JSON'
           {
             "text": "Earnings and Economic Calendar for the week - For internal use only",
             "attachments": [
-              {
-                "title": "Pinned Tweet (Earnings)",
-                "image_url": "__TWEET_URL__"
-              },
-              {
-                "title": "Economic Calendar (FXStreet: High, USD & CAD, This Week)",
-                "image_url": "__FXS_URL__"
-              }
+              { "title": "Earnings Calendar", "image_url": "__EARN_URL__" },
+              { "title": "U.S. Economic Calendar (High, This Week)", "image_url": "__TE_US_URL__" },
+              { "title": "Canada Economic Calendar (High, This Week)", "image_url": "__TE_CA_URL__" }
             ]
           }
           JSON
 
-          # Substitute URLs
-          sed -i "s|__TWEET_URL__|${TWEET_URL}|g" payload.json
-          sed -i "s|__FXS_URL__|${FXS_URL}|g" payload.json
+          sed -i "s|__EARN_URL__|${EARN_URL}|g" payload.json
+          sed -i "s|__TE_US_URL__|${TE_US_URL}|g" payload.json
+          sed -i "s|__TE_CA_URL__|${TE_CA_URL}|g" payload.json
 
-          # Post to Slack
           curl -sS -X POST -H 'Content-type: application/json' \
             --data @payload.json \
             "${SLACK_WEBHOOK}"
