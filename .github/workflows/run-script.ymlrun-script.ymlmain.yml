@@ -1,9 +1,8 @@
 name: Daily Screenshot (ForexFactory + Earnings)
 
 on:
-  # Trigger daily at 12:00 UTC (8:00 AM ET during DST / 7:00 AM during EST)
   schedule:
-    - cron: "0 12 * * *"
+    - cron: "0 12 * * *"      # UTC 12:00 → usually EST 7am, EDT 8am
   workflow_dispatch:
 
 permissions:
@@ -19,11 +18,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Timezone gate (only continue at 08:00 America/New_York)
-        uses: zcong1993/cron-timezone@v1
-        with:
-          cron: "0 8 * * *"            # 08:00 every day
-          timezone: "America/New_York" # DST-aware
+      - name: Skip unless it's exactly 08:00 America/New_York
+        id: check_time
+        run: |
+          NY_HOUR=$(TZ="America/New_York" date +'%H')
+          echo "Hour in New York: $NY_HOUR"
+          if [ "$NY_HOUR" != "08" ]; then
+            echo "IS_NY_8=false" >> $GITHUB_ENV
+          else
+            echo "IS_NY_8=true" >> $GITHUB_ENV
+          fi
+
+      - name: Abort if not 8am NY
+        if: env.IS_NY_8 == 'false'
+        run: |
+          echo "It's not 8am in New York — skipping build."
+          exit 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,15 +47,9 @@ jobs:
           pip install -r requirements.txt
           playwright install --with-deps chromium
 
-      - name: Run screenshot script (outputs to site/)
+      - name: Run screenshot script
         run: python screenshot_forexfactory.py
 
-      - name: Inspect site/ output (debug)
-        run: |
-          echo "Listing ./site"
-          ls -lah site || true
-
-      # Upload the 'site' folder for GitHub Pages (correct action for Pages)
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -54,6 +58,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+
     steps:
       - name: Deploy to GitHub Pages
         id: deploy
@@ -65,10 +70,8 @@ jobs:
     env:
       SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
     steps:
-      - name: Build Slack payload and send
+      - name: Post images to Slack
         run: |
-          set -euo pipefail
-
           OWNER="${GITHUB_REPOSITORY%%/*}"
           REPO="${GITHUB_REPOSITORY##*/}"
           BASE_URL="https://${OWNER}.github.io/${REPO}"
