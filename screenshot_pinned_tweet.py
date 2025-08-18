@@ -7,6 +7,7 @@ OUTPUT_DIR = "site"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 PINNED_TWEET_PNG = os.path.join(OUTPUT_DIR, "pinned_tweet.png")
+# Keep filename so your workflow & Slack step don't need changes:
 FXS_CAL_PNG      = os.path.join(OUTPUT_DIR, "fxstreet_usd_cad_high.png")
 
 # ---------- helpers ----------
@@ -26,16 +27,17 @@ async def safe_click(page, selectors, timeout=3000):
     return False
 
 async def safe_check(page, selectors, timeout=3000):
+    """Try to .check() a checkbox-like control; if that fails, click it."""
     for sel in selectors:
         try:
             if isinstance(sel, tuple) and len(sel) == 3 and sel[0] == "role":
                 _, role, name = sel
                 await page.get_by_role(role, name=name).check(timeout=timeout)
+                return True
             else:
                 await page.locator(sel).first.check(timeout=timeout)
-            return True
+                return True
         except:
-            # If the element is a chip/button rather than a checkbox, try clicking
             try:
                 if not (isinstance(sel, tuple) and sel[0] == "role"):
                     await page.locator(sel).first.click(timeout=timeout)
@@ -64,150 +66,156 @@ async def capture_pinned_tweet(context):
     await page.close()
     return True
 
+# ---------- Myfxbook calendar (but keep same filename) ----------
+
 async def capture_fxstreet_calendar(context):
     """
-    FXStreet Economic Calendar:
-      - Click top 'This Week' chip to force full-week view
-      - Open Filter panel and set: Impact=High, Countries=United States + Canada
-      - Auto-scroll to load late-week items (Thu/Fri)
-      - Crop the top portion for a concise snip
+    Myfxbook Economic Calendar (keeping output name for workflow compatibility):
+      - Date: This Week
+      - Impact: High only
+      - Currencies: USD + CAD
+      - Auto-scroll to load late-week items, then crop the top portion
     """
-    url = "https://www.fxstreet.com/economic-calendar"
+    url = "https://www.myfxbook.com/forex-economic-calendar"
     page = await context.new_page()
-    print(f"[FXS] Navigating… {url}")
+    print(f"[MFB] Navigating… {url}")
     await page.goto(url)
     await asyncio.sleep(6)
 
-    # Sanity: correct domain
-    if "fxstreet.com/economic-calendar" not in page.url:
-        print(f"[FXS][WARN] Unexpected URL after navigation: {page.url}")
-
     # Accept cookies if shown
     for sel in [
-        'button:has-text("Accept all")',
-        'button:has-text("Accept All")',
-        ('role', 'button', 'Accept'),
+        'button:has-text("Accept")',
+        'button:has-text("I Accept")',
         'button:has-text("Agree")',
-        'button[aria-label*="Accept"]'
+        ('role', 'button', 'Accept'),
+        '[aria-label*="accept"]'
     ]:
         if await safe_click(page, [sel], timeout=1500):
             await asyncio.sleep(1)
             break
 
-    # 1) Force "This Week" from the header chips (robust against local cache)
-    print("[FXS] Forcing 'This Week' view from header…")
-    forced_week = await safe_click(page, [
-        'button:has-text("This week")',
-        ('role', 'button', 'This week'),
-        'a:has-text("This week")'
+    # 1) Click "This Week"
+    print("[MFB] Selecting 'This Week'…")
+    week_ok = await safe_click(page, [
+        'button:has-text("This Week")',
+        ('role', 'button', 'This Week'),
+        'a:has-text("This Week")'
     ], timeout=4000)
-    if not forced_week:
-        print("[FXS][WARN] Could not click header 'This week' chip.")
+    if not week_ok:
+        # Some UIs show "Week" or a calendar range dropdown
+        week_ok = await safe_click(page, [
+            'button:has-text("Week")',
+            ('role', 'button', 'Week')
+        ], timeout=2000)
+    if not week_ok:
+        print("[MFB][WARN] Could not confirm 'This Week' selection; proceeding.")
+
     await asyncio.sleep(2)
 
-    # 2) Open Filter panel
-    print("[FXS] Opening Filter panel…")
-    opened = await safe_click(page, [
-        ('role', 'button', 'Filter'),
-        'button:has-text("Filter")',
-        'button[aria-label*="Filter"]',
-        'button:has-text("Filters")',
-    ], timeout=3000)
-    if not opened:
-        print("[FXS][WARN] Could not open Filter panel; will capture with header week only.")
-        # Ensure full-week content is loaded before screenshot
-        await _fxs_load_full_week(page)
-        await capture_fxstreet_container(page, crop_height=1200)
-        await page.close()
-        return True
-    await asyncio.sleep(0.6)
-
-    # 3) Impact = High only (unselect Low/Medium if toggled)
-    print("[FXS] Selecting Impact: High…")
+    # 2) Impact: High only (uncheck Medium/Low)
+    print("[MFB] Setting Impact: High only…")
+    # Open importance/impact controls if collapsed
     await safe_click(page, [
-        ('role', 'button', 'Impact'),
-        'button:has-text("Impact")',
-        '[data-testid*="impact"]',
+        'button:has-text("Importance")',
+        ('role', 'button', 'Importance'),
+        '[aria-label*="Importance"]',
+        '[data-testid*="importance"]'
     ], timeout=1500)
-    await asyncio.sleep(0.2)
+
+    # Uncheck Medium/Low if on
     for low in ["Low", "Medium"]:
         await safe_click(page, [
             ('role', 'checkbox', low),
             f'label:has-text("{low}")',
+            f'input[type="checkbox"][value*="{low.lower()}"]',
             f'button:has-text("{low}")'
-        ], timeout=800)  # toggles off if on
+        ], timeout=800)
+
+    # Ensure High is selected
     await safe_check(page, [
         ('role', 'checkbox', 'High'),
         'label:has-text("High")',
+        'input[type="checkbox"][value*="high"]',
         'button:has-text("High")',
         '[aria-label*="High"]'
     ], timeout=1500)
 
-    # 4) Countries = United States + Canada
-    print("[FXS] Selecting Countries: United States + Canada…")
+    # 3) Currencies: USD + CAD
+    print("[MFB] Selecting currencies: USD + CAD…")
+    # Open currency filter if needed
     await safe_click(page, [
-        ('role', 'button', 'Country'),
-        'button:has-text("Country")',
-        'button:has-text("Countries")',
-        '[data-testid*="country"]',
+        'button:has-text("Currency")',
+        'button:has-text("Currencies")',
+        ('role', 'button', 'Currency'),
+        '[aria-label*="Currency"]',
+        '[data-testid*="currency"]'
     ], timeout=1500)
-    await asyncio.sleep(0.2)
-    # Clear any preselect
+    await asyncio.sleep(0.4)
+
+    # Deselect all (if there is a clear/reset)
     await safe_click(page, [
         'button:has-text("Clear")',
-        'button:has-text("Clear all")',
         'button:has-text("Reset")',
-    ], timeout=800)
+        'a:has-text("Clear")',
+        'a:has-text("Reset")'
+    ], timeout=1000)
 
-    for name in ["United States", "Canada"]:
+    # Now select only USD and CAD
+    for curr in ["USD", "CAD"]:
         ok = await safe_check(page, [
-            ('role', 'checkbox', name),
-            f'label:has-text("{name}")',
-            f'button:has-text("{name}")',
-            f'[aria-label*="{name}"]',
+            ('role', 'checkbox', curr),
+            f'label:has-text("{curr}")',
+            f'input[type="checkbox"][value="{curr}"]',
+            f'button:has-text("{curr}")',
+            f'[aria-label*="{curr}"]'
         ], timeout=1500)
         if not ok:
-            print(f"[FXS][WARN] Could not select country: {name}")
+            print(f"[MFB][WARN] Could not select currency: {curr}")
 
-    # Apply filters
-    print("[FXS] Applying filters…")
+    # Apply/close filters if an explicit button exists
     await safe_click(page, [
         'button:has-text("Apply")',
         ('role', 'button', 'Apply'),
         'button:has-text("Done")',
         ('role', 'button', 'Done'),
-        'button:has-text("Close")'
-    ], timeout=2000)
+        'button:has-text("Close")',
+        'button:has-text("OK")'
+    ], timeout=1500)
+
     await asyncio.sleep(2)
 
-    # 5) Ensure full week is loaded (lazy-loaded list)
-    await _fxs_load_full_week(page)
+    # 4) Ensure full week is loaded (lazy loading)
+    await _mfb_load_full_week(page)
 
-    # 6) Crop top portion for compact snip
-    await capture_fxstreet_container(page, crop_height=1200)
+    # 5) Crop a compact top section
+    await capture_myfxbook_container(page, crop_height=1200)
     await page.close()
     return True
 
-
-async def _fxs_load_full_week(page):
-    """Scrolls the calendar to trigger lazy-loading until Thu/Fri appear, then back to top."""
-    print("[FXS] Ensuring full week is loaded…")
-    # Find scrollable calendar container if any; else use page
+async def _mfb_load_full_week(page):
+    """Scrolls the list to trigger lazy-loading until Thu/Fri appears, then back to top."""
+    print("[MFB] Ensuring full week is loaded…")
     await page.evaluate("""
       (function() {
-        const el =
-          document.querySelector('section:has(table)') ||
-          document.querySelector('div:has(table)') ||
-          document.querySelector('[data-testid*="calendar"]') ||
-          document.querySelector('main') ||
-          document.scrollingElement;
-        window.__calEl = el || document.scrollingElement;
+        const possibles = [
+          'section:has(table)',
+          'div:has(table)',
+          '#economicCalendarTab',
+          '.economicCalendar',
+          '[data-testid*="calendar"]',
+          'main'
+        ];
+        for (const sel of possibles) {
+          const el = document.querySelector(sel);
+          if (el) { window.__calEl = el; return true; }
+        }
+        window.__calEl = document.scrollingElement;
         return true;
       })();
     """)
 
-    saw_late_week = false_detected = False
-    for _ in range(16):  # up to ~16 screens
+    saw_late_week = False
+    for _ in range(16):
         try:
             await page.evaluate("""
               (function() {
@@ -218,13 +226,12 @@ async def _fxs_load_full_week(page):
         except:
             pass
         await asyncio.sleep(0.7)
-        # Look for late-week day labels in the HTML chunk
         html = (await page.content())[:220000].lower()
         if any(day in html for day in ["thu", "fri", "sat", "sun"]):
             saw_late_week = True
             break
 
-    # Scroll back to top for clean capture
+    # Back to top for a clean crop
     try:
         await page.evaluate("""
           (function() {
@@ -235,16 +242,18 @@ async def _fxs_load_full_week(page):
     except:
         pass
     await asyncio.sleep(0.6)
-    print(f"[FXS] Late-week detected: {saw_late_week}")
+    print(f"[MFB] Late-week detected: {saw_late_week}")
 
-
-async def capture_fxstreet_container(page, crop_height=1200):
+async def capture_myfxbook_container(page, crop_height=1200):
     """
-    Screenshot the calendar container (preferred) or a top-cropped full-page fallback.
+    Screenshot the calendar container (preferred) or top-cropped full page.
+    Saves to FXS_CAL_PNG to keep workflow unchanged.
     """
-    print("[FXS] Capturing calendar area…")
+    print("[MFB] Capturing calendar area…")
     container = None
     for sel in [
+        '#economicCalendarTab',
+        '.economicCalendar',
         'section:has(table)',
         'div:has(table)',
         '[data-testid*="calendar"]',
@@ -259,22 +268,20 @@ async def capture_fxstreet_container(page, crop_height=1200):
         except:
             pass
 
-    target_path = os.path.join(OUTPUT_DIR, "fxstreet_usd_cad_high.png")
-
     if not container:
-        # fallback: crop the top of the viewport
+        # fallback: crop top of viewport
         if crop_height:
             clip = {"x": 0, "y": 0, "width": 1600, "height": crop_height}
-            await page.screenshot(path=target_path, clip=clip)
+            await page.screenshot(path=FXS_CAL_PNG, clip=clip)
         else:
-            await page.screenshot(path=target_path, full_page=True)
-        print(f"[FXS][OK] Saved (fallback): {target_path}")
+            await page.screenshot(path=FXS_CAL_PNG, full_page=True)
+        print(f"[MFB][OK] Saved (fallback): {FXS_CAL_PNG}")
         return
 
     box = await container.bounding_box()
     if not box:
-        await page.screenshot(path=target_path, full_page=True)
-        print(f"[FXS][OK] Saved (bbox fallback): {target_path}")
+        await page.screenshot(path=FXS_CAL_PNG, full_page=True)
+        print(f"[MFB][OK] Saved (bbox fallback): {FXS_CAL_PNG}")
         return
 
     top_height = crop_height if crop_height else box["height"]
@@ -284,9 +291,10 @@ async def capture_fxstreet_container(page, crop_height=1200):
         "width": int(box["width"]),
         "height": int(min(box["height"], top_height))
     }
-    await page.screenshot(path=target_path, clip=clip)
-    print(f"[FXS][OK] Saved (cropped): {target_path}")
+    await page.screenshot(path=FXS_CAL_PNG, clip=clip)
+    print(f"[MFB][OK] Saved (cropped): {FXS_CAL_PNG}")
 
+# ---------- main ----------
 
 async def main():
     async with async_playwright() as p:
@@ -299,12 +307,9 @@ async def main():
         )
 
         await capture_pinned_tweet(context)
-        await capture_fxstreet_calendar(context)
+        await capture_fxstreet_calendar(context)  # now points to Myfxbook
 
         await browser.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-
