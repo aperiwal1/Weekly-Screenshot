@@ -13,6 +13,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,13 +30,15 @@ jobs:
           playwright install --with-deps chromium
 
       - name: Run screenshot script (outputs to site/)
+        env:
+          TE_API_KEY: ${{ secrets.TE_API_KEY }}
         run: python screenshot_pinned_tweet.py
 
-      - name: Inspect site/ output
+      - name: Inspect site/ output (debug)
         run: |
           echo "Listing ./site"
           ls -lah site || true
-          
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -57,17 +60,18 @@ jobs:
     env:
       SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
     steps:
-      - name: Build Slack payload and post
+      - name: Post images to Slack via webhook (inline)
         run: |
           set -euo pipefail
-  
-          # Derive public GitHub Pages URLs for the images
+
           OWNER="${GITHUB_REPOSITORY%%/*}"
           REPO="${GITHUB_REPOSITORY##*/}"
-          TWEET_URL="https://${OWNER}.github.io/${REPO}/pinned_tweet.png"
-          FF_URL="https://${OWNER}.github.io/${REPO}/forexfactory_usd_cad_high.png"
-  
-          # Create JSON payload with placeholders
+          BASE_URL="https://${OWNER}.github.io/${REPO}"
+
+          TWEET_URL="${BASE_URL}/pinned_tweet.png"
+          TE_URL="${BASE_URL}/te_usd_cad_high.png"
+
+          # Build payload with both images (Slack will render them inline)
           cat > payload.json <<'JSON'
           {
             "text": "Earnings and Economic Calendar for the week - For internal use only",
@@ -77,19 +81,18 @@ jobs:
                 "image_url": "__TWEET_URL__"
               },
               {
-                "title": "Economic Calendar (ForexFactory: High impact, USD & CAD)",
-                "image_url": "__FF_URL__"
+                "title": "Economic Calendar (High impact, USD & CAD)",
+                "image_url": "__TE_URL__"
               }
             ]
           }
           JSON
-  
-          # Substitute placeholders with actual URLs
+
+          # Substitute URLs
           sed -i "s|__TWEET_URL__|${TWEET_URL}|g" payload.json
-          sed -i "s|__FF_URL__|${FF_URL}|g" payload.json
-  
-          # Post to Slack via Incoming Webhook
+          sed -i "s|__TE_URL__|${TE_URL}|g" payload.json
+
+          # Post to Slack
           curl -sS -X POST -H 'Content-type: application/json' \
             --data @payload.json \
             "${SLACK_WEBHOOK}"
-
