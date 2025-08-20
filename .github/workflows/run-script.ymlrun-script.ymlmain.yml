@@ -1,14 +1,25 @@
 name: Daily Screenshot (ForexFactory + Earnings)
 
 on:
+  # Fire several times in the 12:00 UTC hour so we survive GitHub cron delays
   schedule:
-    - cron: "0 12 * * *"      # UTC 12:00 → usually EST 7am, EDT 8am
+    - cron: "0 12 * * *"
+    - cron: "10 12 * * *"
+    - cron: "20 12 * * *"
+    - cron: "30 12 * * *"
+    - cron: "40 12 * * *"
+    - cron: "50 12 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
   pages: write
   id-token: write
+
+# Avoid overlapping runs on the same branch
+concurrency:
+  group: daily-screenshot-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -18,21 +29,39 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Skip unless it's exactly 08:00 America/New_York
-        id: check_time
+      - name: Log current time
+        run: |
+          echo "UTC now:      $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "New York now: $(TZ='America/New_York' date '+%Y-%m-%d %H:%M:%S %Z')"
+
+      # Gate: only continue during 08:00–08:59 New York time
+      - name: Proceed only if 08:00–09:00 in New York
+        id: gate
         run: |
           NY_HOUR=$(TZ="America/New_York" date +'%H')
-          echo "Hour in New York: $NY_HOUR"
+          NY_MIN=$(TZ="America/New_York" date +'%M')
+          echo "NY time detected: ${NY_HOUR}:${NY_MIN}"
           if [ "$NY_HOUR" != "08" ]; then
-            echo "IS_NY_8=false" >> $GITHUB_ENV
-          else
-            echo "IS_NY_8=true" >> $GITHUB_ENV
+            echo "Outside 08:00–09:00 ET; skipping."
+            exit 0
           fi
 
-      - name: Abort if not 8am NY
-        if: env.IS_NY_8 == 'false'
+      # Prepare a per-day cache key to prevent double-posting
+      - name: Set date key
+        id: datekey
+        run: echo "DATE_UTC=$(date -u +%Y-%m-%d)" >> $GITHUB_ENV
+
+      - name: Restore 'posted today' cache
+        id: posted_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .post-cache
+          key: posted-${{ github.repository }}-${{ github.workflow }}-${{ env.DATE_UTC }}
+
+      - name: Skip if we've already posted today
+        if: steps.posted_cache.outputs.cache-hit == 'true'
         run: |
-          echo "It's not 8am in New York — skipping build."
+          echo "Already posted today (key: ${{ steps.posted_cache.outputs.cache-primary-key }}). Skipping."
           exit 0
 
       - name: Set up Python
@@ -55,10 +84,21 @@ jobs:
         with:
           path: ./site
 
+      # Mark as posted today and save cache so later triggers skip
+      - name: Mark posted today
+        run: |
+          mkdir -p .post-cache
+          echo "posted $(date -u)" > .post-cache/posted.txt
+
+      - name: Save 'posted today' cache
+        uses: actions/cache/save@v4
+        with:
+          path: .post-cache
+          key: posted-${{ github.repository }}-${{ github.workflow }}-${{ env.DATE_UTC }}
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
-
     steps:
       - name: Deploy to GitHub Pages
         id: deploy
