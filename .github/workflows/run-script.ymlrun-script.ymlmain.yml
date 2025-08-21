@@ -1,14 +1,9 @@
 name: Daily Screenshot (ForexFactory + Earnings)
 
 on:
-  # Fire several times in the 12:00 UTC hour so we survive GitHub cron delays
+  # Single trigger, 45 minutes earlier than the old 12:00 UTC
   schedule:
-    - cron: "0 12 * * *"
-    - cron: "10 12 * * *"
-    - cron: "20 12 * * *"
-    - cron: "30 12 * * *"
-    - cron: "40 12 * * *"
-    - cron: "50 12 * * *"
+    - cron: "15 11 * * *"   # 11:15 UTC
   workflow_dispatch:
 
 permissions:
@@ -16,7 +11,6 @@ permissions:
   pages: write
   id-token: write
 
-# Avoid overlapping runs on the same branch
 concurrency:
   group: daily-screenshot-${{ github.ref }}
   cancel-in-progress: true
@@ -34,19 +28,23 @@ jobs:
           echo "UTC now:      $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
           echo "New York now: $(TZ='America/New_York' date '+%Y-%m-%d %H:%M:%S %Z')"
 
-      # Gate: only continue during 08:00–08:59 New York time
-      - name: Proceed only if 08:00–09:00 in New York
-        id: gate
+      # Gate: allow 07:15–08:59 ET so the earlier cron won't get skipped,
+      # but we still only post around the 8am hour.
+      - name: Proceed only if 07:15–08:59 in New York
         run: |
           NY_HOUR=$(TZ="America/New_York" date +'%H')
           NY_MIN=$(TZ="America/New_York" date +'%M')
           echo "NY time detected: ${NY_HOUR}:${NY_MIN}"
-          if [ "$NY_HOUR" != "08" ]; then
-            echo "Outside 08:00–09:00 ET; skipping."
+          if [ "$NY_HOUR" -lt "07" ] || [ "$NY_HOUR" -gt "08" ]; then
+            echo "Outside 07:15–08:59 ET; skipping."
+            exit 0
+          fi
+          if [ "$NY_HOUR" = "07" ] && [ "$NY_MIN" -lt "15" ]; then
+            echo "Before 07:15 ET; skipping."
             exit 0
           fi
 
-      # Prepare a per-day cache key to prevent double-posting
+      # Prepare a per-day cache key to prevent double-posting (still useful)
       - name: Set date key
         id: datekey
         run: echo "DATE_UTC=$(date -u +%Y-%m-%d)" >> $GITHUB_ENV
@@ -84,7 +82,6 @@ jobs:
         with:
           path: ./site
 
-      # Mark as posted today and save cache so later triggers skip
       - name: Mark posted today
         run: |
           mkdir -p .post-cache
