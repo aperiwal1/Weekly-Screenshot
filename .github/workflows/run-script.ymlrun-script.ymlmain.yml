@@ -110,15 +110,16 @@ jobs:
     env:
       SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
     steps:
-      - name: Post images to Slack
+      - name: Post images to Slack (date-stamped URLs)
         run: |
           OWNER="${GITHUB_REPOSITORY%%/*}"
           REPO="${GITHUB_REPOSITORY##*/}"
           BASE_URL="https://${OWNER}.github.io/${REPO}"
-      
-          EARN_URL="${BASE_URL}/pinned_tweet.png"
-          FF_URL="${BASE_URL}/forexfactory_full.png"
-      
+
+          DATE_NY=$(TZ='America/New_York' date +%Y-%m-%d)
+          EARN_URL="${BASE_URL}/pinned_tweet_${DATE_NY}.png"
+          FF_URL="${BASE_URL}/forexfactory_full_${DATE_NY}.png"
+
           cat > payload.json <<'JSON'
           {
             "text": "Earnings and Economic Calendar for the week - For internal use only",
@@ -128,10 +129,10 @@ jobs:
             ]
           }
           JSON
-      
+
           sed -i "s|__EARN_URL__|${EARN_URL}|g" payload.json
           sed -i "s|__FF_URL__|${FF_URL}|g" payload.json
-      
+
           curl -sS --max-time 20 -X POST -H 'Content-type: application/json' \
             --data @payload.json \
             "${SLACK_WEBHOOK}"
