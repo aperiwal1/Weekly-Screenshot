@@ -1,12 +1,23 @@
 import asyncio
 import os
+import shutil
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from playwright.async_api import async_playwright
 
 OUTPUT_DIR = "site"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-EARNINGS_PNG = os.path.join(OUTPUT_DIR, "pinned_tweet.png")
-FF_PNG       = os.path.join(OUTPUT_DIR, "forexfactory_full.png")
+# Use New York date so filenames match your posting day
+DATE_NY = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+
+# Dated filenames (immutable history)
+EARNINGS_PNG_DATED = os.path.join(OUTPUT_DIR, f"pinned_tweet_{DATE_NY}.png")
+FF_PNG_DATED       = os.path.join(OUTPUT_DIR, f"forexfactory_full_{DATE_NY}.png")
+
+# “Latest” convenience copies (overwrite each run)
+EARNINGS_PNG_LATEST = os.path.join(OUTPUT_DIR, "pinned_tweet_latest.png")
+FF_PNG_LATEST       = os.path.join(OUTPUT_DIR, "forexfactory_full_latest.png")
 
 
 async def scroll_full_page(page, steps=15, delay=1.0):
@@ -31,8 +42,14 @@ async def capture_earnings_calendar(context):
         await page.close()
         return False
 
-    await tweet.screenshot(path=EARNINGS_PNG)
-    print(f"[Earnings][OK] Saved: {EARNINGS_PNG}")
+    await tweet.screenshot(path=EARNINGS_PNG_DATED)
+    # Update latest copy
+    try:
+        shutil.copyfile(EARNINGS_PNG_DATED, EARNINGS_PNG_LATEST)
+    except Exception as e:
+        print(f"[Earnings][WARN] Could not write latest copy: {e}")
+
+    print(f"[Earnings][OK] Saved: {EARNINGS_PNG_DATED}")
     await page.close()
     return True
 
@@ -67,8 +84,15 @@ async def capture_forexfactory_fullpage(context):
 
     # Scroll to load the full week, then screenshot the ENTIRE page
     await scroll_full_page(page, steps=18, delay=0.9)
-    await page.screenshot(path=FF_PNG, full_page=True)
-    print(f"[FF][OK] Saved: {FF_PNG}")
+    await page.screenshot(path=FF_PNG_DATED, full_page=True)
+
+    # Update latest copy
+    try:
+        shutil.copyfile(FF_PNG_DATED, FF_PNG_LATEST)
+    except Exception as e:
+        print(f"[FF][WARN] Could not write latest copy: {e}")
+
+    print(f"[FF][OK] Saved: {FF_PNG_DATED}")
     await page.close()
     return True
 
